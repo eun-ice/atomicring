@@ -4,7 +4,7 @@
  Upsides:
 
  - Writes and reads should be approx. O(1) even during heavy concurrency
- - No allocs
+ - No allocs once created
 
  Downsides:
 
@@ -14,7 +14,7 @@
  - maximum capacity of 65536 entries
  - capacity is rounded up to the next power of 2
 
- Implementation details:
+ # Implementation details:
 
  This implementation uses a 64 Bit atomic to store the state
 
