@@ -1,0 +1,14 @@
+[[package]]
+name = "atomic64"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "atomicring"
+version = "0.1.0"
+dependencies = [
+ "atomic64 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[metadata]
+"checksum atomic64 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)" = "2b1f0175a4390063632781bb20c646d0fb77566d4a9a861512ab3b8d55f06601"

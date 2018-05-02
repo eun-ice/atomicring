@@ -1,0 +1,7 @@
+[package]
+name = "atomicring"
+version = "0.1.0"
+authors = ["Crown Software GmbH"]
+
+[dependencies]
+atomic64="*"
