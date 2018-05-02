@@ -2,6 +2,10 @@
 name = "atomicring"
 version = "0.1.0"
 authors = ["Crown Software GmbH"]
+description = "AtomicRingBuffer is a lock free and concurrent ring buffer"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/eun-ice/atomicring"
 
 [dependencies]
 atomic64="*"
+
