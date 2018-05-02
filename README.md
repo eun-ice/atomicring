@@ -12,7 +12,7 @@
  - No blocking wait/poll
  - only efficient on 64bit architectures
  - maximum capacity of 65536 entries
- - capacity is
+ - capacity is rounded up to the next power of 2
 
  Implementation details:
 
