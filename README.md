@@ -18,18 +18,18 @@
 
  This implementation uses a 64 Bit atomic to store the state
 
+```
  +--------+--------+----------------+--------+--------+----------------+
  | w_done | w_pend |  write_index   | r_done | r_pend |   read_index   |
  +--------+--------+----------------+--------+--------+----------------+
+```
 
- write_index and read_index are 16bit indizes on the current read/write position of the ring
- buffer.
+- write_index/read_index are 16bit indizes on the current read/write position of the ring buffer.
+- r_pend/w_pend is the number of pending concurrent read/writes
+- r_done/w_done is the number of completed read/writes.
 
-
- r_pend/w_pend is the number of pending concurrent read/writes and r_done/w_done is the number of completed read/writes.
-
- For reading first r_pend is incremented, then the content of the ring buffer is read from memory.
- After reading r_done is incremented. If r_done is equal to r_pend then both are set to 0 and read_index is incremented.
+ For reading r_pend is incremented first, then the content of the ring buffer is read from memory.
+ After reading is done r_done is incremented. read_index is only incremented if r_done is equal to r_pend.
 
  For writing first w_pend is incremented, then the content of the ring buffer is updated.
  After writing w_done is incremented. If w_done is equal to w_pend then both are set to 0 and write_index is incremented.

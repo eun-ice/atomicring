@@ -584,21 +584,18 @@ mod tests {
 
         let mut handles = Vec::new();
         let end = ::std::time::Instant::now() + ::std::time::Duration::from_millis(10000);
-        for thread_num in 0..100 {
+        for _thread_num in 0..100 {
             let buf = ::std::sync::Arc::clone(&arc);
             handles.push(::std::thread::spawn(move || {
-                println!("start {}", thread_num);
                 while ::std::time::Instant::now() < end {
                     let a = buf.try_pop().expect("Pop a");
                     let b = buf.try_pop().expect("Pop b");
                     buf.try_push(a).expect("push a");
                     buf.try_push(b).expect("push b");
                 }
-                println!("done {}", thread_num);
             }));
         }
-        for (idx, handle) in handles.into_iter().enumerate() {
-            println!("join {}", idx);
+        for (_idx, handle) in handles.into_iter().enumerate() {
             handle.join().expect("join");
         }
 
