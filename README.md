@@ -51,7 +51,7 @@ This package only depends on [atomic64](https://github.com/obourgain/rust-atomic
 
 # Usage
 
-AtomicRingBuffer is on [crates.io](https://crates.io/crates/atomicring) and on [docs.rs](https://docs.rs/atomicring/0.1.0/atomicring/)
+AtomicRingBuffer is on [crates.io](https://crates.io/crates/atomicring) and on [docs.rs](https://docs.rs/atomicring/)
 
 To use AtomicRingBuffer, add this to your `Cargo.toml`:
 
