@@ -94,7 +94,7 @@ unsafe impl<T: Send> Sync for AtomicRingBuffer<T> {}
 impl<T: Sized> AtomicRingBuffer<T> {
     /// create a new instance of an AtomicRingBuffer with the given capacity
     /// the capacity is rounded up to the next power of 2
-    pub fn new(mut capacity: usize) -> AtomicRingBuffer<T> {
+    pub fn new(capacity: usize) -> AtomicRingBuffer<T> {
         if capacity > (::std::u16::MAX as usize) + 1 {
             panic!("too large!");
         }
