@@ -6,6 +6,8 @@ description = "AtomicRingBuffer is a lock free and concurrent ring buffer"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/eun-ice/atomicring"
 
+
+
 [dependencies]
-atomic64 = "0.1.1"
+atomic64 = "0.1.2"
 

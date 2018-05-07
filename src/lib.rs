@@ -1,3 +1,4 @@
+#![feature(const_fn)]
 extern crate atomic64;
 
 mod atomic_ring;
