@@ -1,6 +1,6 @@
 # AtomicRingBuffer
  
-[![Build Status](https://travis-ci.org/eun-ice/atomicring.svg?branch=master)](https://travis-ci.org/obourgain/rust-atomic64)
+[![Build Status](https://travis-ci.org/eun-ice/atomicring.svg?branch=master)](https://travis-ci.org/eun-ice/atomicring)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/eun-ice/atomicring)
 [![Cargo](https://img.shields.io/crates/v/atomicring.svg)](https://crates.io/crates/atomicring)
 [![Documentation](https://docs.rs/atomicring/badge.svg)](https://docs.rs/atomicring)
@@ -17,11 +17,10 @@ A constant-size lock-free and almost wait-free ring buffer
  
  Downsides
 
- - nightly rust required (because of [atomic64](https://github.com/obourgain/rust-atomic64))  
  - growing/shrinking is not supported
  - no blocking poll support
- - only efficient on 64bit architectures (uses [atomic64](https://github.com/obourgain/rust-atomic64)) 
- - maximum capacity of 65536 entries
+ - only efficient on 64bit architectures (uses a Mutex on non-64bit architectures) 
+ - maximum capacity of 65535 entries
  - capacity is rounded up to the next power of 2
 
  ## Implementation details
@@ -51,8 +50,7 @@ A constant-size lock-free and almost wait-free ring buffer
 
 ## Dependencies
 
-This package depends on [atomic64](https://github.com/obourgain/rust-atomic64) to simulate a 64bit atomic using locks on non 64bit platforms.
-
+This package has no dependencies
 
 ## Usage
 
@@ -60,7 +58,7 @@ To use AtomicRingBuffer, add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-atomicring = "0.1.0"
+atomicring = "0.2.0"
 ```
 
 

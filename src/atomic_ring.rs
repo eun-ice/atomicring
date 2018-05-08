@@ -1,4 +1,3 @@
-use atomic64::atomic64::AtomicU64;
 use std::fmt;
 use std::mem;
 use std::ptr;
@@ -90,7 +89,7 @@ pub struct AtomicRingBuffer<T: Sized> {
     cap_mask: u16,
     memory: Option<Box<[T]>>,
     ptr: *mut T,
-    counters: AtomicU64,
+    counters: counterstore::CounterStore,
 }
 
 /// Any particular `T` should never accessed concurrently, so T does not need to be Sync
@@ -151,7 +150,7 @@ impl<T: Sized> AtomicRingBuffer<T> {
             cap_mask,
             ptr,
             memory: Some(memory),
-            counters: AtomicU64::new(0),
+            counters: counterstore::CounterStore::new(),
         }
     }
 
@@ -163,32 +162,32 @@ impl<T: Sized> AtomicRingBuffer<T> {
 
 
         // Mark write as in progress
-        let mut counters = self.counters.load(Ordering::Acquire) as u64;
+        let mut counters = self.counters.load(Ordering::Acquire);
         loop {
             // spin wait on 255 simultanous in progress writes
-            if write_in_process_count_full(counters) {
+            if counters.write_in_process_count_full() {
                 spin_loop_hint();
-                counters = self.counters.load(Ordering::Acquire) as u64;
+                counters = self.counters.load(Ordering::Acquire);
                 continue;
             }
-            let write_in_progress_count = write_in_process_count(counters) as u16;
-            let write_idx = write_index(counters);
+            let write_in_progress_count = counters.write_in_process_count() as u16;
+            let write_idx = counters.write_index();
 
             to_write_index = write_idx.wrapping_add(write_in_progress_count) & self.cap_mask;
 
-            if to_write_index.wrapping_add(1) & self.cap_mask == read_index(counters) {
+            if to_write_index.wrapping_add(1) & self.cap_mask == counters.read_index() {
                 // spin wait if we want to add to full atomic ring and reads are in progress
-                if read_in_process_count(counters) > 0 {
+                if counters.read_in_process_count() > 0 {
                     spin_loop_hint();
-                    counters = self.counters.load(Ordering::Acquire) as u64;
+                    counters = self.counters.load(Ordering::Acquire);
                     continue;
                 }
                 return Err(content);
             }
 
-            let new_counters = increment_write_in_process(counters);
+            let new_counters = counters.increment_write_in_process();
 
-            let existing = self.counters.compare_and_swap(counters, new_counters, Ordering::Acquire) as u64;
+            let existing = self.counters.compare_and_swap(counters, new_counters, Ordering::Acquire);
 
             if existing == counters {
                 counters = new_counters;
@@ -204,9 +203,9 @@ impl<T: Sized> AtomicRingBuffer<T> {
 
         // Mark write as done
         loop {
-            let new_counters = increment_write_done(counters, self.cap_mask);
+            let new_counters = counters.increment_write_done(self.cap_mask);
 
-            let existing = self.counters.compare_and_swap(counters, new_counters, Ordering::Release) as u64;
+            let existing = self.counters.compare_and_swap(counters, new_counters, Ordering::Release);
 
             if existing == counters {
                 return Ok(());
@@ -233,26 +232,26 @@ impl<T: Sized> AtomicRingBuffer<T> {
     /// Pop an object from the ring buffer, returns None if the buffer is empty
     #[inline]
     pub fn try_pop(&self) -> Option<T> {
-        let mut counters = self.counters.load(Ordering::Acquire) as u64;
+        let mut counters = self.counters.load(Ordering::Acquire);
 
         // Mark read as in progress
         let mut to_read_index;
         loop {
             // spin wait on 255 simultanous in progress reads
-            if read_in_process_count_full(counters) {
+            if counters.read_in_process_count_full() {
                 spin_loop_hint();
-                counters = self.counters.load(Ordering::Acquire) as u64;
+                counters = self.counters.load(Ordering::Acquire);
                 continue;
             }
 
-            to_read_index = read_index(counters).wrapping_add(read_in_process_count(counters) as u16) & self.cap_mask;
-            if to_read_index == write_index(counters) {
+            to_read_index = counters.read_index().wrapping_add(counters.read_in_process_count() as u16) & self.cap_mask;
+            if to_read_index == counters.write_index() {
                 return None;
             }
 
-            let new_counters = increment_read_in_process(counters);
+            let new_counters = counters.increment_read_in_process();
 
-            let existing = self.counters.compare_and_swap(counters, new_counters, Ordering::Acquire) as u64;
+            let existing = self.counters.compare_and_swap(counters, new_counters, Ordering::Acquire);
             if existing == counters {
                 counters = new_counters;
                 break;
@@ -267,9 +266,9 @@ impl<T: Sized> AtomicRingBuffer<T> {
 
         // Mark read as done
         loop {
-            let new_counters = increment_read_done(counters, self.cap_mask);
+            let new_counters = counters.increment_read_done(self.cap_mask);
 
-            let existing = self.counters.compare_and_swap(counters, new_counters, Ordering::Release) as u64;
+            let existing = self.counters.compare_and_swap(counters, new_counters, Ordering::Release);
             if existing == counters {
                 break;
             }
@@ -282,14 +281,14 @@ impl<T: Sized> AtomicRingBuffer<T> {
     /// Returns the number of objects stored in the ring buffer that are not in process of being removed.
     #[inline]
     pub fn size(&self) -> usize {
-        size(self.counters.load(Ordering::Relaxed) as u64, self.cap)
+        self.counters.load(Ordering::Relaxed).size(self.cap)
     }
 
 
     /// Returns the true if ring buffer is empty. Equivalent to `self.size() - pending reads`
     #[inline]
     pub fn is_empty(&self) -> bool {
-        size(self.counters.load(Ordering::Relaxed) as u64, self.cap) == 0
+        self.counters.load(Ordering::Relaxed).size(self.cap) == 0
     }
 
     /// Returns the maximum capacity of the ring buffer
@@ -302,7 +301,7 @@ impl<T: Sized> AtomicRingBuffer<T> {
     /// This is equal to `self.cap() - self.size() - pending writes + pending reads`.
     #[inline]
     pub fn remaining_cap(&self) -> usize {
-        remaining_cap(self.counters.load(Ordering::Relaxed) as u64, self.cap)
+        self.counters.load(Ordering::Relaxed).remaining_cap(self.cap)
     }
 
     /// Pop everything from ring buffer and discard it.
@@ -319,29 +318,29 @@ impl<T: Sized> AtomicRingBuffer<T> {
 
     /// pop one element, but only if ringbuffer is full, used by push_overwrite
     fn remove_if_full(&self) -> Option<T> {
-        let mut counters = self.counters.load(Ordering::Acquire) as u64;
+        let mut counters = self.counters.load(Ordering::Acquire);
 
         let mut to_read_index;
         loop {
             // spin wait on 255 simultanous in progress writes
-            if read_in_process_count_full(counters) {
+            if counters.read_in_process_count_full() {
                 spin_loop_hint();
-                counters = self.counters.load(Ordering::Acquire) as u64;
+                counters = self.counters.load(Ordering::Acquire);
                 continue;
             }
 
-            if read_in_process_count(counters) > 0 {
+            if counters.read_in_process_count() > 0 {
                 return None;
             }
 
-            to_read_index = read_index(counters);
-            if to_read_index.wrapping_add(1) & self.cap_mask == write_index(counters) {
+            to_read_index = counters.read_index();
+            if to_read_index.wrapping_add(1) & self.cap_mask == counters.write_index() {
                 return None;
             }
 
-            let new_counters = increment_read_in_process(counters);
+            let new_counters = counters.increment_read_in_process();
 
-            let existing = self.counters.compare_and_swap(counters, new_counters, Ordering::Acquire) as u64;
+            let existing = self.counters.compare_and_swap(counters, new_counters, Ordering::Acquire);
             if existing == counters {
                 counters = new_counters;
                 break;
@@ -356,9 +355,9 @@ impl<T: Sized> AtomicRingBuffer<T> {
 
         // Mark read as done
         loop {
-            let new_counters = increment_read_done(counters, self.cap_mask);
+            let new_counters = counters.increment_read_done(self.cap_mask);
 
-            let existing = self.counters.compare_and_swap(counters, new_counters, Ordering::Release) as u64;
+            let existing = self.counters.compare_and_swap(counters, new_counters, Ordering::Release);
             if existing == counters {
                 break;
             }
@@ -374,8 +373,8 @@ impl<T> fmt::Debug for AtomicRingBuffer<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if f.alternate() {
             let cap = self.cap;
-            let counters = self.counters.load(Ordering::Relaxed) as u64;
-            write!(f, "AtomicRingBuffer cap: {} size: {} read_index: {}, read_in_process_count: {}, read_done_count: {}, write_index: {}, write_in_process_count: {}, write_done_count: {}", cap, size(counters, cap), read_index(counters), read_in_process_count(counters), read_done_count(counters), write_index(counters), write_in_process_count(counters), write_done_count(counters))
+            let counters = self.counters.load(Ordering::Relaxed);
+            write!(f, "AtomicRingBuffer cap: {} size: {} read_index: {}, read_in_process_count: {}, read_done_count: {}, write_index: {}, write_in_process_count: {}, write_done_count: {}", cap, counters.size(cap), counters.read_index(), counters.read_in_process_count(), counters.read_done_count(), counters.write_index(), counters.write_in_process_count(), counters.write_done_count())
         } else {
             write!(f, "AtomicRingBuffer cap: {} size: {}", self.cap, self.size())
         }
@@ -383,106 +382,163 @@ impl<T> fmt::Debug for AtomicRingBuffer<T> {
 }
 
 
-#[inline(always)]
-fn read_index(counters: u64) -> u16 {
-    (counters & 0xFFFF) as u16
-}
-
-#[inline(always)]
-fn read_in_process_count(counters: u64) -> u8 {
-    ((counters >> 16) & 0xFF) as u8
-}
-
-#[inline(always)]
-fn read_in_process_count_full(counters: u64) -> bool {
-    counters & (0xFF << 16) == (0xFF << 16)
-}
-
-#[inline(always)]
-fn read_done_count(counters: u64) -> u8 {
-    ((counters >> 24) & 0xFF) as u8
-}
+#[derive(Eq, PartialEq, Copy, Clone)]
+pub struct Counters(u64);
 
 
-#[inline(always)]
-fn write_index(counters: u64) -> u16 {
-    ((counters >> 32) & 0xFFFF) as u16
-}
+impl Counters {
+    #[inline(always)]
+    fn read_index(&self) -> u16 {
+        (self.0 & 0xFFFF) as u16
+    }
 
-#[inline(always)]
-fn write_in_process_count(counters: u64) -> u8 {
-    ((counters >> 48) & 0xFF) as u8
-}
+    #[inline(always)]
+    fn read_in_process_count(&self) -> u8 {
+        ((self.0 >> 16) & 0xFF) as u8
+    }
 
-#[inline(always)]
-fn write_in_process_count_full(counters: u64) -> bool {
-    counters & (0xFF << 48) == (0xFF << 48)
-}
+    #[inline(always)]
+    fn read_in_process_count_full(&self) -> bool {
+        self.0 & (0xFF << 16) == (0xFF << 16)
+    }
 
-#[inline(always)]
-fn write_done_count(counters: u64) -> u8 {
-    ((counters >> 56) & 0xFF) as u8
-}
+    #[inline(always)]
+    fn read_done_count(&self) -> u8 {
+        ((self.0 >> 24) & 0xFF) as u8
+    }
 
-#[inline(always)]
-fn increment_read_done(counters: u64, cap_mask: u16) -> u64 {
-    let read_in_process_count = read_in_process_count(counters);
-    // if the new read_done_count would equal read_in_process_count count
-    if read_done_count(counters) + 1 == read_in_process_count {
-        // preserve write counters, increment read_index and zero read_in_process_count and read_done_count (= commit)
-        (counters & 0xFFFFFFFF00000000) |
-            ((read_index(counters).wrapping_add(read_in_process_count as u16) & cap_mask) as u64)
-    } else {
-        // otherwise we just increment read_done_count
-        counters + (1 << 24)
+
+    #[inline(always)]
+    fn write_index(&self) -> u16 {
+        ((self.0 >> 32) & 0xFFFF) as u16
+    }
+
+    #[inline(always)]
+    fn write_in_process_count(&self) -> u8 {
+        ((self.0 >> 48) & 0xFF) as u8
+    }
+
+    #[inline(always)]
+    fn write_in_process_count_full(&self) -> bool {
+        self.0 & (0xFF << 48) == (0xFF << 48)
+    }
+
+    #[inline(always)]
+    fn write_done_count(&self) -> u8 {
+        ((self.0 >> 56) & 0xFF) as u8
+    }
+
+    #[inline(always)]
+    fn increment_read_done(&self, cap_mask: u16) -> Counters {
+        let read_in_process_count = self.read_in_process_count();
+        // if the new read_done_count would equal read_in_process_count count
+        Counters(if self.read_done_count() + 1 == read_in_process_count {
+            // preserve write self.0, increment read_index and zero read_in_process_count and read_done_count (= commit)
+            (self.0 & 0xFFFFFFFF00000000) |
+                ((self.read_index().wrapping_add(read_in_process_count as u16) & cap_mask) as u64)
+        } else {
+            // otherwise we just increment read_done_count
+            self.0 + (1 << 24)
+        })
+    }
+
+    #[inline(always)]
+    fn increment_read_in_process(&self) -> Counters {
+        Counters(self.0 + (1 << 16))
+    }
+
+    #[inline(always)]
+    fn increment_write_done(&self, cap_mask: u16) -> Counters {
+        let write_in_process_count = self.write_in_process_count();
+
+        // if the new write_done_count would equal write_in_process_count
+        Counters(if self.write_done_count() + 1 == write_in_process_count {
+            // preserve read self.0, increment write_index and zero write_in_process_count and write_done_count
+            ((((self.write_index().wrapping_add(write_in_process_count as u16)) & cap_mask) as u64) << 32)
+                | self.0 & 0xFFFFFFFF
+        } else {
+            // otherwise we just increment write_done_count
+            self.0 + (1 << 56)
+        })
+    }
+
+
+    #[inline(always)]
+    fn increment_write_in_process(&self) -> Counters {
+        Counters(self.0 + (1 << 48))
+    }
+
+    #[inline(always)]
+    fn size(&self, cap: u32) -> usize {
+        let read_index = self.read_index();
+        let write_index = self.write_index();
+        let size = if read_index <= write_index { write_index as usize - read_index as usize } else { write_index as usize + cap as usize - read_index as usize };
+        //size is from read_index to write_index, but we have to subtract read_in_process_count for a better size approximation
+        size - self.read_in_process_count() as usize
+    }
+
+
+    #[inline(always)]
+    fn remaining_cap(&self, cap: u32) -> usize {
+        let read_index = self.read_index();
+        let write_index = self.write_index();
+        let size = if read_index <= write_index { write_index as usize - read_index as usize } else { write_index as usize + cap as usize - read_index as usize };
+        //size is from read_index to write_index, but we have to substract write_in_process_count for a better remaining capacity approximation
+        cap as usize - 1 - size - self.write_in_process_count() as usize
     }
 }
 
-#[inline(always)]
-fn increment_read_in_process(counters: u64) -> u64 {
-    counters + (1 << 16)
-}
 
-#[inline(always)]
-fn increment_write_done(counters: u64, cap_mask: u16) -> u64 {
-    let write_in_process_count = write_in_process_count(counters);
+#[cfg(target_pointer_width = "64")]
+mod counterstore {
+    pub struct CounterStore {
+        counters: ::std::sync::atomic::AtomicUsize,
 
-    // if the new write_done_count would equal write_in_process_count
-    if write_done_count(counters) + 1 == write_in_process_count {
-        // preserve read counters, increment write_index and zero write_in_process_count and write_done_count
-        ((((write_index(counters).wrapping_add(write_in_process_count as u16)) & cap_mask) as u64) << 32)
-            | counters & 0xFFFFFFFF
-    } else {
-        // otherwise we just increment write_done_count
-        counters + (1 << 56)
+    }
+
+    impl CounterStore {
+        pub fn new() -> CounterStore {
+            CounterStore { counters: ::std::sync::atomic::AtomicUsize::new(0) }
+        }
+        #[inline(always)]
+        pub fn load(&self, ordering: super::Ordering) -> super::Counters {
+            super::Counters(self.counters.load(ordering) as u64)
+        }
+        #[inline(always)]
+        pub fn compare_and_swap(&self, old: super::Counters, new: super::Counters, ordering: super::Ordering) -> super::Counters {
+            super::Counters(self.counters.compare_and_swap(old.0 as usize, new.0 as usize, ordering) as u64)
+        }
     }
 }
 
 
-#[inline(always)]
-fn increment_write_in_process(counters: u64) -> u64 {
-    counters as u64 + (1 << 48)
+#[cfg(not(target_pointer_width = "64"))]
+mod counterstore {
+    pub struct CounterStore {
+        counters: ::std::sync::Mutex<u64>,
+
+    }
+
+    impl CounterStore {
+        pub fn new() -> CounterStore {
+            CounterStore { counters: ::std::sync::Mutex::new(0) }
+        }
+        #[inline(always)]
+        pub fn load(&self, _ordering: super::Ordering) -> super::Counters {
+            super::Counters(*self.counters.lock().unwrap())
+        }
+        #[inline(always)]
+        pub fn compare_and_swap(&self, old: super::Counters, new: super::Counters, _ordering: super::Ordering) -> super::Counters {
+            let mut mutex = self.counters.lock().unwrap();
+            if *mutex != old.0 {
+                return super::Counters(*mutex);
+            }
+            *mutex = new.0;
+
+            return old;
+        }
+    }
 }
-
-#[inline(always)]
-fn size(counters: u64, cap: u32) -> usize {
-    let read_index = read_index(counters);
-    let write_index = write_index(counters);
-    let size = if read_index <= write_index { write_index as usize - read_index as usize } else { write_index as usize + cap as usize - read_index as usize };
-    //size is from read_index to write_index, but we have to subtract read_in_process_count for a better size approximation
-    size - read_in_process_count(counters) as usize
-}
-
-
-#[inline(always)]
-fn remaining_cap(counters: u64, cap: u32) -> usize {
-    let read_index = read_index(counters);
-    let write_index = write_index(counters);
-    let size = if read_index <= write_index { write_index as usize - read_index as usize } else { write_index as usize + cap as usize - read_index as usize };
-    //size is from read_index to write_index, but we have to substract write_in_process_count for a better remaining capacity approximation
-    cap as usize - 1 - size - write_in_process_count(counters) as usize
-}
-
 
 impl<T> Drop for AtomicRingBuffer<T> {
     fn drop(&mut self) {
@@ -497,46 +553,46 @@ impl<T> Drop for AtomicRingBuffer<T> {
 mod tests {
     #[test]
     pub fn test_increments() {
-        let mut counters = 0 as u64;
+        let mut counters = super::Counters(0);
         // 16 elements
         let cap = 16;
         let cap_mask = 0xf;
 
 
         for i in 0..8 {
-            assert_eq!((0, (0 + i * 3) % 16, 0, 0, (0 + i * 3) % 16, 0, 0), (super::size(counters, cap), super::read_index(counters), super::read_in_process_count(counters), super::read_done_count(counters), super::write_index(counters), super::write_in_process_count(counters), super::write_done_count(counters)));
+            assert_eq!((0, (0 + i * 3) % 16, 0, 0, (0 + i * 3) % 16, 0, 0), (counters.size(cap), counters.read_index(), counters.read_in_process_count(), counters.read_done_count(), counters.write_index(), counters.write_in_process_count(), counters.write_done_count()));
 
-            counters = super::increment_write_in_process(counters);
-            assert_eq!((0, (0 + i * 3) % 16, 0, 0, (0 + i * 3) % 16, 1, 0), (super::size(counters, cap), super::read_index(counters), super::read_in_process_count(counters), super::read_done_count(counters), super::write_index(counters), super::write_in_process_count(counters), super::write_done_count(counters)));
+            counters = counters.increment_write_in_process();
+            assert_eq!((0, (0 + i * 3) % 16, 0, 0, (0 + i * 3) % 16, 1, 0), (counters.size(cap), counters.read_index(), counters.read_in_process_count(), counters.read_done_count(), counters.write_index(), counters.write_in_process_count(), counters.write_done_count()));
 
-            counters = super::increment_write_in_process(counters);
-            assert_eq!((0, (0 + i * 3) % 16, 0, 0, (0 + i * 3) % 16, 2, 0), (super::size(counters, cap), super::read_index(counters), super::read_in_process_count(counters), super::read_done_count(counters), super::write_index(counters), super::write_in_process_count(counters), super::write_done_count(counters)));
-            counters = super::increment_write_in_process(counters);
-            assert_eq!((0, (0 + i * 3) % 16, 0, 0, (0 + i * 3) % 16, 3, 0), (super::size(counters, cap), super::read_index(counters), super::read_in_process_count(counters), super::read_done_count(counters), super::write_index(counters), super::write_in_process_count(counters), super::write_done_count(counters)));
-            counters = super::increment_write_done(counters, cap_mask);
-            assert_eq!((0, (0 + i * 3) % 16, 0, 0, (0 + i * 3) % 16, 3, 1), (super::size(counters, cap), super::read_index(counters), super::read_in_process_count(counters), super::read_done_count(counters), super::write_index(counters), super::write_in_process_count(counters), super::write_done_count(counters)));
-            counters = super::increment_write_done(counters, cap_mask);
-            assert_eq!((0, (0 + i * 3) % 16, 0, 0, (0 + i * 3) % 16, 3, 2), (super::size(counters, cap), super::read_index(counters), super::read_in_process_count(counters), super::read_done_count(counters), super::write_index(counters), super::write_in_process_count(counters), super::write_done_count(counters)));
-            counters = super::increment_write_done(counters, cap_mask);
-            assert_eq!((3, (0 + i * 3) % 16, 0, 0, (3 + i * 3) % 16, 0, 0), (super::size(counters, cap), super::read_index(counters), super::read_in_process_count(counters), super::read_done_count(counters), super::write_index(counters), super::write_in_process_count(counters), super::write_done_count(counters)));
+            counters = counters.increment_write_in_process();
+            assert_eq!((0, (0 + i * 3) % 16, 0, 0, (0 + i * 3) % 16, 2, 0), (counters.size(cap), counters.read_index(), counters.read_in_process_count(), counters.read_done_count(), counters.write_index(), counters.write_in_process_count(), counters.write_done_count()));
+            counters = counters.increment_write_in_process();
+            assert_eq!((0, (0 + i * 3) % 16, 0, 0, (0 + i * 3) % 16, 3, 0), (counters.size(cap), counters.read_index(), counters.read_in_process_count(), counters.read_done_count(), counters.write_index(), counters.write_in_process_count(), counters.write_done_count()));
+            counters = counters.increment_write_done(cap_mask);
+            assert_eq!((0, (0 + i * 3) % 16, 0, 0, (0 + i * 3) % 16, 3, 1), (counters.size(cap), counters.read_index(), counters.read_in_process_count(), counters.read_done_count(), counters.write_index(), counters.write_in_process_count(), counters.write_done_count()));
+            counters = counters.increment_write_done(cap_mask);
+            assert_eq!((0, (0 + i * 3) % 16, 0, 0, (0 + i * 3) % 16, 3, 2), (counters.size(cap), counters.read_index(), counters.read_in_process_count(), counters.read_done_count(), counters.write_index(), counters.write_in_process_count(), counters.write_done_count()));
+            counters = counters.increment_write_done(cap_mask);
+            assert_eq!((3, (0 + i * 3) % 16, 0, 0, (3 + i * 3) % 16, 0, 0), (counters.size(cap), counters.read_index(), counters.read_in_process_count(), counters.read_done_count(), counters.write_index(), counters.write_in_process_count(), counters.write_done_count()));
 
-            counters = super::increment_read_in_process(counters);
-            assert_eq!((2, (0 + i * 3) % 16, 1, 0, (3 + i * 3) % 16, 0, 0), (super::size(counters, cap), super::read_index(counters), super::read_in_process_count(counters), super::read_done_count(counters), super::write_index(counters), super::write_in_process_count(counters), super::write_done_count(counters)));
-            counters = super::increment_read_in_process(counters);
-            assert_eq!((1, (0 + i * 3) % 16, 2, 0, (3 + i * 3) % 16, 0, 0), (super::size(counters, cap), super::read_index(counters), super::read_in_process_count(counters), super::read_done_count(counters), super::write_index(counters), super::write_in_process_count(counters), super::write_done_count(counters)));
-            counters = super::increment_read_in_process(counters);
-            assert_eq!((0, (0 + i * 3) % 16, 3, 0, (3 + i * 3) % 16, 0, 0), (super::size(counters, cap), super::read_index(counters), super::read_in_process_count(counters), super::read_done_count(counters), super::write_index(counters), super::write_in_process_count(counters), super::write_done_count(counters)));
-            counters = super::increment_read_done(counters, cap_mask);
-            assert_eq!((0, (0 + i * 3) % 16, 3, 1, (3 + i * 3) % 16, 0, 0), (super::size(counters, cap), super::read_index(counters), super::read_in_process_count(counters), super::read_done_count(counters), super::write_index(counters), super::write_in_process_count(counters), super::write_done_count(counters)));
-            counters = super::increment_read_done(counters, cap_mask);
-            assert_eq!((0, (0 + i * 3) % 16, 3, 2, (3 + i * 3) % 16, 0, 0), (super::size(counters, cap), super::read_index(counters), super::read_in_process_count(counters), super::read_done_count(counters), super::write_index(counters), super::write_in_process_count(counters), super::write_done_count(counters)));
-            counters = super::increment_read_done(counters, cap_mask);
-            assert_eq!((0, (3 + i * 3) % 16, 0, 0, (3 + i * 3) % 16, 0, 0), (super::size(counters, cap), super::read_index(counters), super::read_in_process_count(counters), super::read_done_count(counters), super::write_index(counters), super::write_in_process_count(counters), super::write_done_count(counters)));
+            counters = counters.increment_read_in_process();
+            assert_eq!((2, (0 + i * 3) % 16, 1, 0, (3 + i * 3) % 16, 0, 0), (counters.size(cap), counters.read_index(), counters.read_in_process_count(), counters.read_done_count(), counters.write_index(), counters.write_in_process_count(), counters.write_done_count()));
+            counters = counters.increment_read_in_process();
+            assert_eq!((1, (0 + i * 3) % 16, 2, 0, (3 + i * 3) % 16, 0, 0), (counters.size(cap), counters.read_index(), counters.read_in_process_count(), counters.read_done_count(), counters.write_index(), counters.write_in_process_count(), counters.write_done_count()));
+            counters = counters.increment_read_in_process();
+            assert_eq!((0, (0 + i * 3) % 16, 3, 0, (3 + i * 3) % 16, 0, 0), (counters.size(cap), counters.read_index(), counters.read_in_process_count(), counters.read_done_count(), counters.write_index(), counters.write_in_process_count(), counters.write_done_count()));
+            counters = counters.increment_read_done(cap_mask);
+            assert_eq!((0, (0 + i * 3) % 16, 3, 1, (3 + i * 3) % 16, 0, 0), (counters.size(cap), counters.read_index(), counters.read_in_process_count(), counters.read_done_count(), counters.write_index(), counters.write_in_process_count(), counters.write_done_count()));
+            counters = counters.increment_read_done(cap_mask);
+            assert_eq!((0, (0 + i * 3) % 16, 3, 2, (3 + i * 3) % 16, 0, 0), (counters.size(cap), counters.read_index(), counters.read_in_process_count(), counters.read_done_count(), counters.write_index(), counters.write_in_process_count(), counters.write_done_count()));
+            counters = counters.increment_read_done(cap_mask);
+            assert_eq!((0, (3 + i * 3) % 16, 0, 0, (3 + i * 3) % 16, 0, 0), (counters.size(cap), counters.read_index(), counters.read_in_process_count(), counters.read_done_count(), counters.write_index(), counters.write_in_process_count(), counters.write_done_count()));
         }
     }
 
     #[test]
-    pub fn test_pool() {
+    pub fn test_pushpop() {
         let ring = super::AtomicRingBuffer::new(900);
 
         assert_eq!(None, ring.try_pop());
@@ -564,7 +620,7 @@ mod tests {
     }
 
     #[test]
-    pub fn test_pool_large() {
+    pub fn test_pushpop_large() {
         let ring = super::AtomicRingBuffer::new(65535);
 
 
@@ -589,7 +645,7 @@ mod tests {
     }
 
     #[test]
-    pub fn test_pool_large2() {
+    pub fn test_pushpop_large2() {
         let ring = super::AtomicRingBuffer::new(65536);
 
 
@@ -612,6 +668,37 @@ mod tests {
             assert_eq!(i, ring.try_pop().unwrap());
         }
     }
+
+
+    #[test]
+    pub fn test_pushpop_large2_zerotype() {
+        #[derive(Eq, PartialEq, Debug)]
+        struct ZeroType {}
+
+        let ring = super::AtomicRingBuffer::new(65536);
+
+        assert_eq!(0, ring.memory_usage());
+
+        assert_eq!(None, ring.try_pop());
+        ring.push_overwrite(ZeroType {});
+        assert_eq!(Some(ZeroType {}), ring.try_pop());
+
+        for _i in 0..200000 {
+            ring.push_overwrite(ZeroType {});
+            assert_eq!(Some(ZeroType {}), ring.try_pop());
+        }
+
+
+        for _i in 0..200000 {
+            ring.push_overwrite(ZeroType {});
+        }
+        assert_eq!(ring.cap(), ring.size() + 1);
+
+        for _i in 200000 - (ring.cap() - 1)..200000 {
+            assert_eq!(ZeroType {}, ring.try_pop().unwrap());
+        }
+    }
+
 
     #[test]
     pub fn test_threaded() {
