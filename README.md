@@ -1,35 +1,40 @@
-
+# AtomicRingBuffer
+ 
 [![Build Status](https://travis-ci.org/eun-ice/atomicring.svg?branch=master)](https://travis-ci.org/obourgain/rust-atomic64)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/eun-ice/atomicring)
+[![Cargo](https://img.shields.io/crates/v/atomicring.svg)](https://crates.io/crates/atomicring)
+[![Documentation](https://docs.rs/atomicring/badge.svg)](https://docs.rs/atomicring)
 
- A constant-size lock-free and almost wait-free ring buffer
-
-
+A constant-size lock-free and almost wait-free ring buffer
+ 
  Upsides
 
- - Very fast, push and pop should be approx. O(1) even during heavy concurrency
- - Only 4 words of memory overhead
+ - fast, try_push and pop are O(1)
+ - scales well even during heavy concurrency
+ - only 4 words of memory overhead
  - no memory allocations after initial creation
  
  
  Downsides
 
- - Fixed size, growing/shrinking is not supported
- - No method for blocking poll
- - Only efficient on 64bit architectures, due to 
+ - nightly rust required (because of [atomic64](https://github.com/obourgain/rust-atomic64))  
+ - growing/shrinking is not supported
+ - no blocking poll support
+ - only efficient on 64bit architectures (uses [atomic64](https://github.com/obourgain/rust-atomic64)) 
  - maximum capacity of 65536 entries
  - capacity is rounded up to the next power of 2
 
- # Implementation details
+ ## Implementation details
 
- This implementation uses a 64 Bit atomic to store the state
+ This implementation uses a 64 Bit atomic to store the entire state
 
 ```Text
- +64------+56------+48--------------+32------+24------+16-------------0+
+ +63----56+55----48+47------------32+31----24+23----16+15-------------0+
  | w_done | w_pend |  write_index   | r_done | r_pend |   read_index   |
  +--------+--------+----------------+--------+--------+----------------+
 ```
 
-- write_index/read_index (16bit): current read/write position in the ring buzffer.
+- write_index/read_index (16bit): current read/write position in the ring buffer (head and tail).
 - r_pend/w_pend (8bit): number of pending concurrent read/writes
 - r_done/w_done (8bit): number of completed read/writes.
 
@@ -39,19 +44,17 @@
  For writing first w_pend is incremented, then the content of the ring buffer is updated.
  After writing w_done is incremented. If w_done is equal to w_pend then both are set to 0 and write_index is incremented.
 
- In rare cases this can result in a race where multiple threads increment r_pend and r_done never quite reaches r_pend.
- If r_pend == 255 or w_pend == 255 a spinloop waits it to be <255 to continue.
+ In rare cases this can result in a race where multiple threads increment r_pend in turn and r_done never quite reaches r_pend.
+ If r_pend == 255 or w_pend == 255 a spinloop waits it to be <255 to continue. This rarely happens in practice, that's why this is called almost wait-free.
 
 
 
+## Dependencies
 
-# Dependencies
+This package depends on [atomic64](https://github.com/obourgain/rust-atomic64) to simulate a 64bit atomic using locks on non 64bit platforms.
 
-This package only depends on [atomic64](https://github.com/obourgain/rust-atomic64)
 
-# Usage
-
-AtomicRingBuffer is on [crates.io](https://crates.io/crates/atomicring) and on [docs.rs](https://docs.rs/atomicring/)
+## Usage
 
 To use AtomicRingBuffer, add this to your `Cargo.toml`:
 
@@ -75,3 +78,10 @@ And something like this to your code
  assert_eq!(Some(1), ring.try_pop());
  assert_eq!(None, ring.try_pop());
  ```
+
+
+## License
+
+Licensed under the terms of MIT license and the Apache License (Version 2.0).
+
+See [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE) for details.
