@@ -1,16 +1,14 @@
 [package]
 name = "atomicring"
-version = "0.3.0"
+version = "0.4.0-alpha"
 authors = ["Crown Software GmbH"]
-description = "AtomicRingBuffer is a constant-size almost lock-free concurrent ring buffer for 64bit platforms"
+description = "AtomicRingBuffer is a constant-size almost lock-free concurrent ring buffer"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/eun-ice/atomicring"
 
 
 [features]
-compare_and_exchange_weak = []
 force_32 = []
-default = ["compare_and_exchange_weak"]
 
 [dev-dependencies]
 mpmc = "0.1.5"
