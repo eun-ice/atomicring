@@ -5,7 +5,7 @@
 [![Cargo](https://img.shields.io/crates/v/atomicring.svg)](https://crates.io/crates/atomicring)
 [![Documentation](https://docs.rs/atomicring/badge.svg)](https://docs.rs/atomicring)
 
-A constant-size lock-free and almost wait-free ring buffer
+A constant-size almost lock-free ring buffer
  
  Upsides
 
@@ -44,7 +44,7 @@ A constant-size lock-free and almost wait-free ring buffer
  After writing w_done is incremented. If w_done is equal to w_pend then both are set to 0 and write_index is incremented.
 
  In rare cases this can result in a race where multiple threads increment r_pend in turn and r_done never quite reaches r_pend.
- If r_pend == 255 or w_pend == 255 a spinloop waits it to be <255 to continue. This rarely happens in practice, that's why this is called almost wait-free.
+ If r_pend == 255 or w_pend == 255 a spinloop waits it to be <255 to continue. This rarely happens in practice, that's why this is called almost lock-free.
 
 
 

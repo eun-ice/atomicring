@@ -1,9 +1,12 @@
 [package]
 name = "atomicring"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["Crown Software GmbH"]
 description = "AtomicRingBuffer is a lock free and highly concurrent ring buffer"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/eun-ice/atomicring"
 
 
+[features]
+compare_and_exchange_weak = []
+default = ["compare_and_exchange_weak"]

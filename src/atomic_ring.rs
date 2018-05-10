@@ -3,7 +3,7 @@ use std::mem;
 use std::ptr;
 use std::sync::atomic::{Ordering, spin_loop_hint};
 
-///A constant-size lock-free and almost wait-free ring buffer
+///A constant-size almost lock-free ring buffer
 ///
 ///Upsides
 ///
@@ -43,7 +43,7 @@ use std::sync::atomic::{Ordering, spin_loop_hint};
 ///After writing w_done is incremented. If w_done is equal to w_pend then both are set to 0 and write_index is incremented.
 ///
 ///In rare cases this can result in a race where multiple threads increment r_pend in turn and r_done never quite reaches r_pend.
-///If r_pend == 255 or w_pend == 255 a spinloop waits it to be <255 to continue. This rarely happens in practice, that's why this is called almost wait-free.
+///If r_pend == 255 or w_pend == 255 a spinloop waits it to be <255 to continue. This rarely happens in practice, that's why this is called almost lock-free.
 ///
 ///
 ///
@@ -186,14 +186,23 @@ impl<T: Sized> AtomicRingBuffer<T> {
             }
 
             let new_counters = counters.increment_write_in_process();
+            if cfg!(feature = "compare_and_exchange_weak") {
+                match self.counters.compare_and_exchange_weak(counters, new_counters, Ordering::Acquire, Ordering::Relaxed) {
+                    Ok(_) => {
+                        counters = new_counters;
+                        break;
+                    }
+                    Err(n) => counters = n
+                };
+            } else {
+                let existing = self.counters.compare_and_swap(counters, new_counters, Ordering::Acquire);
 
-            let existing = self.counters.compare_and_swap(counters, new_counters, Ordering::Acquire);
-
-            if existing == counters {
-                counters = new_counters;
-                break;
+                if existing == counters {
+                    counters = new_counters;
+                    break;
+                }
+                counters = existing;
             }
-            counters = existing;
         }
 
         // write mem
@@ -205,12 +214,21 @@ impl<T: Sized> AtomicRingBuffer<T> {
         loop {
             let new_counters = counters.increment_write_done(self.cap_mask);
 
-            let existing = self.counters.compare_and_swap(counters, new_counters, Ordering::Release);
+            if cfg!(feature = "compare_and_exchange_weak") {
+                match self.counters.compare_and_exchange_weak(counters, new_counters, Ordering::Release, Ordering::Relaxed) {
+                    Ok(_) => {
+                        return Ok(());
+                    }
+                    Err(n) => counters = n
+                };
+            } else {
+                let existing = self.counters.compare_and_swap(counters, new_counters, Ordering::Release);
 
-            if existing == counters {
-                return Ok(());
+                if existing == counters {
+                    return Ok(());
+                }
+                counters = existing;
             }
-            counters = existing;
         }
     }
 
@@ -251,12 +269,22 @@ impl<T: Sized> AtomicRingBuffer<T> {
 
             let new_counters = counters.increment_read_in_process();
 
-            let existing = self.counters.compare_and_swap(counters, new_counters, Ordering::Acquire);
-            if existing == counters {
-                counters = new_counters;
-                break;
+            if cfg!(feature = "compare_and_exchange_weak") {
+                match self.counters.compare_and_exchange_weak(counters, new_counters, Ordering::Acquire, Ordering::Relaxed) {
+                    Ok(_) => {
+                        counters = new_counters;
+                        break;
+                    }
+                    Err(n) => counters = n
+                };
+            } else {
+                let existing = self.counters.compare_and_swap(counters, new_counters, Ordering::Acquire);
+                if existing == counters {
+                    counters = new_counters;
+                    break;
+                }
+                counters = existing;
             }
-            counters = existing;
         }
 
         let popped = unsafe {
@@ -267,12 +295,20 @@ impl<T: Sized> AtomicRingBuffer<T> {
         // Mark read as done
         loop {
             let new_counters = counters.increment_read_done(self.cap_mask);
-
-            let existing = self.counters.compare_and_swap(counters, new_counters, Ordering::Release);
-            if existing == counters {
-                break;
+            if cfg!(feature = "compare_and_exchange_weak") {
+                match self.counters.compare_and_exchange_weak(counters, new_counters, Ordering::Release, Ordering::Relaxed) {
+                    Ok(_) => {
+                        break;
+                    }
+                    Err(n) => counters = n
+                };
+            } else {
+                let existing = self.counters.compare_and_swap(counters, new_counters, Ordering::Release);
+                if existing == counters {
+                    break;
+                }
+                counters = existing;
             }
-            counters = existing;
         }
 
         Some(popped)
@@ -357,11 +393,20 @@ impl<T: Sized> AtomicRingBuffer<T> {
         loop {
             let new_counters = counters.increment_read_done(self.cap_mask);
 
-            let existing = self.counters.compare_and_swap(counters, new_counters, Ordering::Release);
-            if existing == counters {
-                break;
+            if cfg!(feature = "compare_and_exchange_weak") {
+                match self.counters.compare_and_exchange_weak(counters, new_counters, Ordering::Release, Ordering::Relaxed) {
+                    Ok(_) => {
+                        break;
+                    }
+                    Err(n) => counters = n
+                };
+            } else {
+                let existing = self.counters.compare_and_swap(counters, new_counters, Ordering::Release);
+                if existing == counters {
+                    break;
+                }
+                counters = existing;
             }
-            counters = existing;
         }
 
         Some(popped)
@@ -389,12 +434,12 @@ pub struct Counters(u64);
 impl Counters {
     #[inline(always)]
     fn read_index(&self) -> u16 {
-        (self.0 & 0xFFFF) as u16
+        self.0 as u16
     }
 
     #[inline(always)]
     fn read_in_process_count(&self) -> u8 {
-        ((self.0 >> 16) & 0xFF) as u8
+        (self.0 >> 16) as u8
     }
 
     #[inline(always)]
@@ -404,18 +449,18 @@ impl Counters {
 
     #[inline(always)]
     fn read_done_count(&self) -> u8 {
-        ((self.0 >> 24) & 0xFF) as u8
+        (self.0 >> 24) as u8
     }
 
 
     #[inline(always)]
     fn write_index(&self) -> u16 {
-        ((self.0 >> 32) & 0xFFFF) as u16
+        (self.0 >> 32) as u16
     }
 
     #[inline(always)]
     fn write_in_process_count(&self) -> u8 {
-        ((self.0 >> 48) & 0xFF) as u8
+        (self.0 >> 48) as u8
     }
 
     #[inline(always)]
@@ -425,7 +470,7 @@ impl Counters {
 
     #[inline(always)]
     fn write_done_count(&self) -> u8 {
-        ((self.0 >> 56) & 0xFF) as u8
+        (self.0 >> 56) as u8
     }
 
     #[inline(always)]
@@ -508,6 +553,13 @@ mod counterstore {
         pub fn compare_and_swap(&self, old: super::Counters, new: super::Counters, ordering: super::Ordering) -> super::Counters {
             super::Counters(self.counters.compare_and_swap(old.0 as usize, new.0 as usize, ordering) as u64)
         }
+        #[inline(always)]
+        pub fn compare_and_exchange_weak(&self, old: super::Counters, new: super::Counters, ordering: super::Ordering, ordering2: super::Ordering) -> Result<super::Counters, super::Counters> {
+            match self.counters.compare_exchange_weak(old.0 as usize, new.0 as usize, ordering, ordering2) {
+                Ok(_) => Ok(old),
+                Err(x) => Err(super::Counters(x as u64))
+            }
+        }
     }
 }
 
@@ -536,6 +588,17 @@ mod counterstore {
             *mutex = new.0;
 
             return old;
+        }
+
+        #[inline(always)]
+        pub fn compare_and_exchange_weak(&self, old: super::Counters, new: super::Counters, ordering: super::Ordering, ordering2: super::Ordering) -> Result<super::Counters, super::Counters> {
+            let mut mutex = self.counters.lock().unwrap();
+            if *mutex != old.0 {
+                return Err(super::Counters(*mutex));
+            }
+            *mutex = new.0;
+
+            return Ok(old);
         }
     }
 }
@@ -737,7 +800,7 @@ mod tests {
             expected.push(i);
             actual.push(arc.try_pop().expect("check"));
         }
-        actual.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        actual.sort_by(|&a, b| a.partial_cmp(b).unwrap());
         assert_eq!(actual, expected);
     }
 }
