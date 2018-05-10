@@ -10,7 +10,7 @@ use std::sync::atomic::{Ordering, spin_loop_hint};
 ///
 ///- fast, try_push and pop are O(1)
 ///- scales well even during heavy concurrency
-///- only 5 words of memory overhead
+///- only 4 words of memory overhead
 ///- no memory allocations after initial creation
 ///
 ///
@@ -88,10 +88,9 @@ use std::sync::atomic::{Ordering, spin_loop_hint};
 ///
 
 pub struct AtomicRingBuffer<T: Sized> {
-    cap_mask: u16,
-    memory: Option<Box<[T]>>,
-    ptr: *mut T,
     counters: counterstore::CounterStore,
+    cap_mask: u16,
+    ptr: *mut [T],
 }
 
 /// Any particular `T` should never accessed concurrently, so T does not need to be Sync
@@ -137,13 +136,11 @@ impl<T: Sized> AtomicRingBuffer<T> {
         }
         */
 
-        let mut memory = content.into_boxed_slice();
-        let ptr = memory.as_mut_ptr();
+        let ptr = Box::into_raw(content.into_boxed_slice());
 
         AtomicRingBuffer {
             cap_mask,
             ptr,
-            memory: Some(memory),
             counters: counterstore::CounterStore::new(),
         }
     }
@@ -203,7 +200,7 @@ impl<T: Sized> AtomicRingBuffer<T> {
 
         // write mem
         unsafe {
-            ptr::write(self.ptr.offset(to_write_index as isize), content);
+            ptr::write(&mut (*self.ptr)[to_write_index as usize], content);
         }
 
         // Mark write as done
@@ -286,7 +283,7 @@ impl<T: Sized> AtomicRingBuffer<T> {
 
         let popped = unsafe {
             // Read Memory
-            ptr::read(self.ptr.offset(to_read_index as isize))
+            ptr::read(&mut (*self.ptr)[to_read_index as usize])
         };
 
         // Mark read as done
@@ -346,7 +343,7 @@ impl<T: Sized> AtomicRingBuffer<T> {
     /// Returns the memory usage in bytes of the allocated region of the ring buffer.
     /// This does not include overhead.
     pub fn memory_usage(&self) -> usize {
-        ((self.cap_mask as usize) + 1) * mem::size_of_val(&self.memory.as_ref().unwrap()[0])
+        unsafe { mem::size_of_val(&(*self.ptr)) }
     }
 
     /// pop one element, but only if ringbuffer is full, used by push_overwrite
@@ -384,7 +381,7 @@ impl<T: Sized> AtomicRingBuffer<T> {
 
         let popped = unsafe {
             // Read Memory
-            ptr::read(self.ptr.offset(to_read_index as isize))
+            ptr::read(&mut (*self.ptr)[to_read_index as usize])
         };
 
         // Mark read as done
@@ -593,9 +590,10 @@ mod counterstore {
 
 impl<T> Drop for AtomicRingBuffer<T> {
     fn drop(&mut self) {
+        // drop contents
         self.clear();
-        // forget memory to prevent multiple calls to drop
-        unsafe { self.memory.take().unwrap().into_vec().set_len(0); }
+        // drop memory box without dropping contents
+        unsafe { Box::from_raw(self.ptr).into_vec().set_len(0); }
     }
 }
 
@@ -755,7 +753,6 @@ mod tests {
         let cap = 65535;
 
         let buf: super::AtomicRingBuffer<usize> = super::AtomicRingBuffer::with_capacity(cap);
-
 
         for i in 0..cap {
             buf.try_push(i).expect("init");

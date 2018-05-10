@@ -11,7 +11,7 @@ A constant-size almost lock-free concurrent ring buffer for 64bit platforms
 
  - fast, try_push and pop are O(1)
  - scales well even during heavy concurrency
- - only 5 words of memory overhead
+ - only 4 words of memory overhead
  - no memory allocations after initial creation
  
  
