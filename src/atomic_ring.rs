@@ -3,7 +3,7 @@ use std::mem;
 use std::ptr;
 use std::sync::atomic::{Ordering, spin_loop_hint};
 
-///A constant-size almost lock-free ring buffer
+///constant-size almost lock-free ring buffer
 ///
 ///Upsides
 ///
@@ -15,11 +15,10 @@ use std::sync::atomic::{Ordering, spin_loop_hint};
 ///
 ///Downsides
 ///
-///- nightly rust required (because of [atomic64](https://github.com/obourgain/rust-atomic64))  
 ///- growing/shrinking is not supported
 ///- no blocking poll support
-///- only efficient on 64bit architectures (uses [atomic64](https://github.com/obourgain/rust-atomic64)) 
-///- maximum capacity of 65536 entries
+///- only efficient on 64bit architectures (uses a Mutex on non-64bit architectures)
+///- maximum capacity of 65535 entries
 ///- capacity is rounded up to the next power of 2
 ///
 ///## Implementation details
@@ -49,8 +48,7 @@ use std::sync::atomic::{Ordering, spin_loop_hint};
 ///
 ///## Dependencies
 ///
-///This package depends on [atomic64](https://github.com/obourgain/rust-atomic64) to simulate a 64bit atomic using locks on non 64bit platforms.
-///
+///This package has no dependencies
 ///
 ///## Usage
 ///
@@ -58,7 +56,7 @@ use std::sync::atomic::{Ordering, spin_loop_hint};
 ///
 ///```toml
 ///[dependencies]
-///atomicring = "0.1.0"
+///atomicring = "0.2.0"
 ///```
 ///
 ///
@@ -83,7 +81,7 @@ use std::sync::atomic::{Ordering, spin_loop_hint};
 ///Licensed under the terms of MIT license and the Apache License (Version 2.0).
 ///
 ///See [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE) for details.
-
+///
 pub struct AtomicRingBuffer<T: Sized> {
     cap: u32,
     cap_mask: u16,
