@@ -1,4 +1,14 @@
 [[package]]
 name = "atomicring"
-version = "0.2.2"
+version = "0.3.0"
+dependencies = [
+ "mpmc 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
+]
 
+[[package]]
+name = "mpmc"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[metadata]
+"checksum mpmc 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)" = "cb947c698d784291c6b1d97269b0615beb966178537d4502ce90970507e1cf3b"

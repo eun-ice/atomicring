@@ -5,13 +5,13 @@
 [![Cargo](https://img.shields.io/crates/v/atomicring.svg)](https://crates.io/crates/atomicring)
 [![Documentation](https://docs.rs/atomicring/badge.svg)](https://docs.rs/atomicring)
 
-A constant-size almost lock-free ring buffer
+A constant-size almost lock-free concurrent ring buffer for 64bit platforms
  
  Upsides
 
  - fast, try_push and pop are O(1)
  - scales well even during heavy concurrency
- - only 4 words of memory overhead
+ - only 5 words of memory overhead
  - no memory allocations after initial creation
  
  
@@ -22,6 +22,9 @@ A constant-size almost lock-free ring buffer
  - only efficient on 64bit architectures (uses a Mutex on non-64bit architectures) 
  - maximum capacity of 65535 entries
  - capacity is rounded up to the next power of 2
+
+This queue should perform similar to [mpmc](https://github.com/brayniac/mpmc) but with a lower memory overhead. 
+If memory overhead is not your main concern you should run benchmarks to decide which one to use.  
 
  ## Implementation details
 

@@ -3,13 +3,14 @@ use std::mem;
 use std::ptr;
 use std::sync::atomic::{Ordering, spin_loop_hint};
 
-///constant-size almost lock-free ring buffer
+
+///A constant-size almost lock-free concurrent ring buffer for 64bit platforms
 ///
 ///Upsides
 ///
 ///- fast, try_push and pop are O(1)
 ///- scales well even during heavy concurrency
-///- only 4 words of memory overhead
+///- only 5 words of memory overhead
 ///- no memory allocations after initial creation
 ///
 ///
@@ -20,6 +21,9 @@ use std::sync::atomic::{Ordering, spin_loop_hint};
 ///- only efficient on 64bit architectures (uses a Mutex on non-64bit architectures)
 ///- maximum capacity of 65535 entries
 ///- capacity is rounded up to the next power of 2
+///
+///This queue should perform similar to [mpmc](https://github.com/brayniac/mpmc) but with a lower memory overhead. 
+///If memory overhead is not your main concern you should run benchmarks to decide which one to use.
 ///
 ///## Implementation details
 ///
@@ -65,7 +69,7 @@ use std::sync::atomic::{Ordering, spin_loop_hint};
 ///```rust
 ///
 ///// create an AtomicRingBuffer with capacity of 1024 elements 
-///let ring = ::atomicring::AtomicRingBuffer::new(900);
+///let ring = ::atomicring::AtomicRingBuffer::with_capacity(900);
 ///
 ///// try_pop removes an element of the buffer and returns None if the buffer is empty
 ///assert_eq!(None, ring.try_pop());
@@ -82,8 +86,8 @@ use std::sync::atomic::{Ordering, spin_loop_hint};
 ///
 ///See [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE) for details.
 ///
+
 pub struct AtomicRingBuffer<T: Sized> {
-    cap: u32,
     cap_mask: u16,
     memory: Option<Box<[T]>>,
     ptr: *mut T,
@@ -105,7 +109,7 @@ impl<T: Sized> AtomicRingBuffer<T> {
     ///
     ///```
     /// // create an AtomicRingBuffer with capacity of 1024 elements
-    /// let ring = ::atomicring::AtomicRingBuffer::new(900);
+    /// let ring = ::atomicring::AtomicRingBuffer::with_capacity(900);
     ///
     /// // try_pop removes an element of the buffer and returns None if the buffer is empty
     /// assert_eq!(None, ring.try_pop());
@@ -115,20 +119,13 @@ impl<T: Sized> AtomicRingBuffer<T> {
     /// assert_eq!(None, ring.try_pop());
     ///```
     ///
-    pub fn new(capacity: usize) -> AtomicRingBuffer<T> {
+    pub fn with_capacity(capacity: usize) -> AtomicRingBuffer<T> {
         if capacity > (::std::u16::MAX as usize) + 1 {
             panic!("too large!");
         }
 
-        let mut cap_mask: u16 = 1;
-
-        loop {
-            if capacity <= (cap_mask as usize) + 1 {
-                break;
-            }
-            cap_mask = (cap_mask << 1) + 1;
-        }
-        let cap = cap_mask as u32 + 1;
+        let cap = capacity.next_power_of_two() as u32;
+        let cap_mask = (cap - 1) as u16;
 
         /* allocate using a Vec */
         let mut content: Vec<T> = Vec::with_capacity(cap as usize);
@@ -144,7 +141,6 @@ impl<T: Sized> AtomicRingBuffer<T> {
         let ptr = memory.as_mut_ptr();
 
         AtomicRingBuffer {
-            cap,
             cap_mask,
             ptr,
             memory: Some(memory),
@@ -154,7 +150,7 @@ impl<T: Sized> AtomicRingBuffer<T> {
 
     /// Try to push an object to the atomic ring buffer.
     /// If the buffer has no capacity remaining, the pushed object will be returned to the caller as error.
-    #[inline]
+    #[inline(always)]
     pub fn try_push(&self, content: T) -> Result<(), T> {
         let mut to_write_index;
 
@@ -162,16 +158,18 @@ impl<T: Sized> AtomicRingBuffer<T> {
         // Mark write as in progress
         let mut counters = self.counters.load(Ordering::Acquire);
         loop {
+            let write_in_process_count = counters.write_in_process_count() as u16;
+
             // spin wait on 255 simultanous in progress writes
-            if counters.write_in_process_count_full() {
+            if write_in_process_count == 255 {
                 spin_loop_hint();
                 counters = self.counters.load(Ordering::Acquire);
                 continue;
             }
-            let write_in_progress_count = counters.write_in_process_count() as u16;
+
             let write_idx = counters.write_index();
 
-            to_write_index = write_idx.wrapping_add(write_in_progress_count) & self.cap_mask;
+            to_write_index = write_idx.wrapping_add(write_in_process_count) & self.cap_mask;
 
             if to_write_index.wrapping_add(1) & self.cap_mask == counters.read_index() {
                 // spin wait if we want to add to full atomic ring and reads are in progress
@@ -246,21 +244,22 @@ impl<T: Sized> AtomicRingBuffer<T> {
     }
 
     /// Pop an object from the ring buffer, returns None if the buffer is empty
-    #[inline]
+    #[inline(always)]
     pub fn try_pop(&self) -> Option<T> {
         let mut counters = self.counters.load(Ordering::Acquire);
 
         // Mark read as in progress
         let mut to_read_index;
         loop {
+            let read_in_process_count = counters.read_in_process_count();
             // spin wait on 255 simultanous in progress reads
-            if counters.read_in_process_count_full() {
+            if read_in_process_count == 255 {
                 spin_loop_hint();
                 counters = self.counters.load(Ordering::Acquire);
                 continue;
             }
 
-            to_read_index = counters.read_index().wrapping_add(counters.read_in_process_count() as u16) & self.cap_mask;
+            to_read_index = counters.read_index().wrapping_add(read_in_process_count as u16) & self.cap_mask;
             if to_read_index == counters.write_index() {
                 return None;
             }
@@ -315,27 +314,27 @@ impl<T: Sized> AtomicRingBuffer<T> {
     /// Returns the number of objects stored in the ring buffer that are not in process of being removed.
     #[inline]
     pub fn size(&self) -> usize {
-        self.counters.load(Ordering::Relaxed).size(self.cap)
+        self.counters.load(Ordering::Relaxed).size((self.cap_mask as u32) + 1)
     }
 
 
     /// Returns the true if ring buffer is empty. Equivalent to `self.size() - pending reads`
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.counters.load(Ordering::Relaxed).size(self.cap) == 0
+        self.counters.load(Ordering::Relaxed).size((self.cap_mask as u32) + 1) == 0
     }
 
     /// Returns the maximum capacity of the ring buffer
     #[inline]
     pub fn cap(&self) -> usize {
-        return self.cap as usize;
+        return self.cap_mask as usize + 1;
     }
 
     /// Returns the remaining capacity of the ring buffer.
     /// This is equal to `self.cap() - self.size() - pending writes + pending reads`.
     #[inline]
     pub fn remaining_cap(&self) -> usize {
-        self.counters.load(Ordering::Relaxed).remaining_cap(self.cap)
+        self.counters.load(Ordering::Relaxed).remaining_cap((self.cap_mask as u32) + 1)
     }
 
     /// Pop everything from ring buffer and discard it.
@@ -347,7 +346,7 @@ impl<T: Sized> AtomicRingBuffer<T> {
     /// Returns the memory usage in bytes of the allocated region of the ring buffer.
     /// This does not include overhead.
     pub fn memory_usage(&self) -> usize {
-        (self.cap as usize) * mem::size_of_val(&self.memory.as_ref().unwrap()[0])
+        ((self.cap_mask as usize) + 1) * mem::size_of_val(&self.memory.as_ref().unwrap()[0])
     }
 
     /// pop one element, but only if ringbuffer is full, used by push_overwrite
@@ -356,14 +355,15 @@ impl<T: Sized> AtomicRingBuffer<T> {
 
         let mut to_read_index;
         loop {
+            let read_in_process_count = counters.read_in_process_count();
             // spin wait on 255 simultanous in progress writes
-            if counters.read_in_process_count_full() {
+            if read_in_process_count == 255 {
                 spin_loop_hint();
                 counters = self.counters.load(Ordering::Acquire);
                 continue;
             }
 
-            if counters.read_in_process_count() > 0 {
+            if read_in_process_count > 0 {
                 return None;
             }
 
@@ -415,11 +415,11 @@ impl<T: Sized> AtomicRingBuffer<T> {
 impl<T> fmt::Debug for AtomicRingBuffer<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if f.alternate() {
-            let cap = self.cap;
+            let cap = self.cap_mask as u32 + 1;
             let counters = self.counters.load(Ordering::Relaxed);
             write!(f, "AtomicRingBuffer cap: {} size: {} read_index: {}, read_in_process_count: {}, read_done_count: {}, write_index: {}, write_in_process_count: {}, write_done_count: {}", cap, counters.size(cap), counters.read_index(), counters.read_in_process_count(), counters.read_done_count(), counters.write_index(), counters.write_in_process_count(), counters.write_done_count())
         } else {
-            write!(f, "AtomicRingBuffer cap: {} size: {}", self.cap, self.size())
+            write!(f, "AtomicRingBuffer cap: {} size: {}", self.cap_mask as usize + 1, self.size())
         }
     }
 }
@@ -441,11 +441,6 @@ impl Counters {
     }
 
     #[inline(always)]
-    fn read_in_process_count_full(&self) -> bool {
-        self.0 & (0xFF << 16) == (0xFF << 16)
-    }
-
-    #[inline(always)]
     fn read_done_count(&self) -> u8 {
         (self.0 >> 24) as u8
     }
@@ -459,11 +454,6 @@ impl Counters {
     #[inline(always)]
     fn write_in_process_count(&self) -> u8 {
         (self.0 >> 48) as u8
-    }
-
-    #[inline(always)]
-    fn write_in_process_count_full(&self) -> bool {
-        self.0 & (0xFF << 48) == (0xFF << 48)
     }
 
     #[inline(always)]
@@ -532,7 +522,7 @@ impl Counters {
 }
 
 
-#[cfg(target_pointer_width = "64")]
+#[cfg(all(target_pointer_width = "64", not(feature = "force_32")))]
 mod counterstore {
     pub struct CounterStore {
         counters: ::std::sync::atomic::AtomicUsize,
@@ -552,17 +542,17 @@ mod counterstore {
             super::Counters(self.counters.compare_and_swap(old.0 as usize, new.0 as usize, ordering) as u64)
         }
         #[inline(always)]
-        pub fn compare_and_exchange_weak(&self, old: super::Counters, new: super::Counters, ordering: super::Ordering, ordering2: super::Ordering) -> Result<super::Counters, super::Counters> {
-            match self.counters.compare_exchange_weak(old.0 as usize, new.0 as usize, ordering, ordering2) {
+        pub fn compare_and_exchange_weak(&self, old: super::Counters, new: super::Counters, success: super::Ordering, failure: super::Ordering) -> Result<super::Counters, super::Counters> {
+            match self.counters.compare_exchange_weak(old.0 as usize, new.0 as usize, success, failure) {
                 Ok(_) => Ok(old),
-                Err(x) => Err(super::Counters(x as u64))
+                Err(previous) => Err(super::Counters(previous as u64))
             }
         }
     }
 }
 
 
-#[cfg(not(target_pointer_width = "64"))]
+#[cfg(any(not(target_pointer_width = "64"), feature = "force_32"))]
 mod counterstore {
     pub struct CounterStore {
         counters: ::std::sync::Mutex<u64>,
@@ -589,7 +579,7 @@ mod counterstore {
         }
 
         #[inline(always)]
-        pub fn compare_and_exchange_weak(&self, old: super::Counters, new: super::Counters, ordering: super::Ordering, ordering2: super::Ordering) -> Result<super::Counters, super::Counters> {
+        pub fn compare_and_exchange_weak(&self, old: super::Counters, new: super::Counters, _ordering: super::Ordering, _ordering2: super::Ordering) -> Result<super::Counters, super::Counters> {
             let mut mutex = self.counters.lock().unwrap();
             if *mutex != old.0 {
                 return Err(super::Counters(*mutex));
@@ -605,7 +595,7 @@ impl<T> Drop for AtomicRingBuffer<T> {
     fn drop(&mut self) {
         self.clear();
         // forget memory to prevent multiple calls to drop
-        mem::forget(self.memory.take());
+        unsafe { self.memory.take().unwrap().into_vec().set_len(0); }
     }
 }
 
@@ -654,8 +644,7 @@ mod tests {
 
     #[test]
     pub fn test_pushpop() {
-        let ring = super::AtomicRingBuffer::new(900);
-
+        let ring = super::AtomicRingBuffer::with_capacity(900);
         assert_eq!(None, ring.try_pop());
         ring.push_overwrite(1);
         assert_eq!(Some(1), ring.try_pop());
@@ -682,7 +671,7 @@ mod tests {
 
     #[test]
     pub fn test_pushpop_large() {
-        let ring = super::AtomicRingBuffer::new(65535);
+        let ring = super::AtomicRingBuffer::with_capacity(65535);
 
 
         assert_eq!(None, ring.try_pop());
@@ -707,7 +696,7 @@ mod tests {
 
     #[test]
     pub fn test_pushpop_large2() {
-        let ring = super::AtomicRingBuffer::new(65536);
+        let ring = super::AtomicRingBuffer::with_capacity(65536);
 
 
         assert_eq!(None, ring.try_pop());
@@ -736,7 +725,7 @@ mod tests {
         #[derive(Eq, PartialEq, Debug)]
         struct ZeroType {}
 
-        let ring = super::AtomicRingBuffer::new(65536);
+        let ring = super::AtomicRingBuffer::with_capacity(65536);
 
         assert_eq!(0, ring.memory_usage());
 
@@ -765,7 +754,7 @@ mod tests {
     pub fn test_threaded() {
         let cap = 65535;
 
-        let buf: super::AtomicRingBuffer<usize> = super::AtomicRingBuffer::new(cap);
+        let buf: super::AtomicRingBuffer<usize> = super::AtomicRingBuffer::with_capacity(cap);
 
 
         for i in 0..cap {
