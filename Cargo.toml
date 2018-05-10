@@ -13,4 +13,4 @@ force_32 = []
 default = ["compare_and_exchange_weak"]
 
 [dev-dependencies]
-mpmc="*"
+mpmc = "0.1.5"
