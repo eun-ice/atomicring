@@ -11,7 +11,7 @@ Upsides
 
 - fast, try_push and try_pop are O(1)
 - scales well even during heavy concurrency
-- only 5 words of memory overhead
+- only 6 words of memory overhead
 - no memory allocations after initial creation
 
 
