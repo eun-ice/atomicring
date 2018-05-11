@@ -21,6 +21,7 @@ fn bench_ring_singlethread_small(b: &mut Bencher) {
     });
 }
 
+
 #[bench]
 fn bench_ring_singlethread_large(b: &mut Bencher) {
     let ring: AtomicRingBuffer<LargeType> = AtomicRingBuffer::with_capacity(10000);
@@ -61,6 +62,16 @@ fn bench_mpmc_singlethread_small(b: &mut Bencher) {
         }
     });
 }
+
+#[allow(dead_code)]
+#[derive(Default)]
+struct ZeroType {
+    some: usize
+}
+
+unsafe impl Send for ZeroType {}
+
+unsafe impl Sync for ZeroType {}
 
 
 #[allow(dead_code)]
