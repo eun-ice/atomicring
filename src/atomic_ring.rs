@@ -10,7 +10,7 @@ use std::sync::atomic::{Ordering, spin_loop_hint};
 ///
 ///- fast, try_push and pop are O(1)
 ///- scales well even during heavy concurrency
-///- only 6 words of memory overhead
+///- only 4 words of memory overhead
 ///- no memory allocations after initial creation
 ///
 ///
@@ -64,7 +64,7 @@ use std::sync::atomic::{Ordering, spin_loop_hint};
 ///
 ///```toml
 ///[dependencies]
-///atomicring = "0.4.0"
+///atomicring = "0.4.4"
 ///```
 ///
 ///
@@ -94,7 +94,7 @@ use std::sync::atomic::{Ordering, spin_loop_hint};
 pub struct AtomicRingBuffer<T: Sized> {
     read_counters: CounterStore,
     write_counters: CounterStore,
-    cap_mask: usize,
+    #[cfg(not(feature = "index_access"))]
     ptr: *mut T,
     mem: *mut [T],
 }
@@ -131,7 +131,6 @@ impl<T: Sized> AtomicRingBuffer<T> {
         }
 
         let cap = capacity.next_power_of_two();
-        let cap_mask = cap - 1;
 
         /* allocate using a Vec */
         let mut content: Vec<T> = Vec::with_capacity(cap);
@@ -144,11 +143,9 @@ impl<T: Sized> AtomicRingBuffer<T> {
         */
         let mem = Box::into_raw(content.into_boxed_slice());
 
-        let ptr = unsafe { ::std::mem::transmute(&mut (*mem)[0]) };
-
         AtomicRingBuffer {
-            cap_mask,
-            ptr,
+            #[cfg(not(feature = "index_access"))]
+            ptr: unsafe { ::std::mem::transmute(&mut (*mem)[0]) },
             mem,
             read_counters: CounterStore::new(),
             write_counters: CounterStore::new(),
@@ -156,14 +153,31 @@ impl<T: Sized> AtomicRingBuffer<T> {
         }
     }
 
+    /// Returns a *mut T pointer to an indexed cell
+    #[cfg(feature = "index_access")]
+    unsafe fn cell(&self, index: usize) -> *mut T {
+        (&mut (*self.mem)[index])
+    }
+
+
+    /// Returns a *mut T pointer to an indexed cell
+    #[cfg(not(feature = "index_access"))]
+    unsafe fn cell(&self, index: usize) -> *mut T {
+        self.ptr.offset(index as isize)
+    }
+
+    /// Returns the capacity mask
+    #[inline(always)]
+    fn cap_mask(&self) -> usize {
+        self.cap() - 1
+    }
+
     /// Try to push an object to the atomic ring buffer.
     /// If the buffer has no capacity remaining, the pushed object will be returned to the caller as error.
     #[inline(always)]
     pub fn try_push(&self, content: T) -> Result<(), T> {
-        let cap_mask = self.cap_mask;
-
+        let cap_mask = self.cap_mask();
         let mut to_write_index;
-
         // Mark write as in progress
         let mut write_counters = self.write_counters.load(Ordering::Acquire);
         loop {
@@ -176,9 +190,8 @@ impl<T: Sized> AtomicRingBuffer<T> {
                 continue;
             }
 
-            let write_idx = write_counters.index();
 
-            to_write_index = write_idx.wrapping_add(write_in_process_count as usize) & cap_mask;
+            to_write_index = write_counters.index().wrapping_add(write_in_process_count as usize) & cap_mask;
 
             if to_write_index.wrapping_add(1) & cap_mask == self.read_counters.load(Ordering::SeqCst).index() {
                 return Err(content);
@@ -196,7 +209,7 @@ impl<T: Sized> AtomicRingBuffer<T> {
 
         // write mem
         unsafe {
-            ptr::write_unaligned(self.ptr.offset(to_write_index as isize), content);
+            ptr::write_unaligned(self.cell(to_write_index), content);
         }
 
         // Mark write as done
@@ -228,15 +241,16 @@ impl<T: Sized> AtomicRingBuffer<T> {
     /// Pop an object from the ring buffer, returns None if the buffer is empty
     #[inline]
     pub fn try_pop(&self) -> Option<T> {
+        let cap_mask = self.cap_mask();
         let mut read_counters = self.read_counters.load(Ordering::Acquire);
-        //  let cap_mask = self.cap_mask;
-
 
         // Mark read as in progress
         let mut to_read_index;
         loop {
             let read_in_process_count = read_counters.in_process_count();
-            to_read_index = read_counters.index().wrapping_add(read_in_process_count as usize) & self.cap_mask;
+
+            to_read_index = read_counters.index().wrapping_add(read_in_process_count as usize) & cap_mask;
+
             if to_read_index == self.write_counters.load(Ordering::SeqCst).index() {
                 return None;
             }
@@ -262,12 +276,12 @@ impl<T: Sized> AtomicRingBuffer<T> {
 
         let popped = unsafe {
             // Read Memory
-            ptr::read_unaligned(self.ptr.offset(to_read_index as isize))
+            ptr::read_unaligned(self.cell(to_read_index))
         };
 
         // Mark read as done
         loop {
-            let new_counters = read_counters.increment_done(self.cap_mask, to_read_index);
+            let new_counters = read_counters.increment_done(cap_mask, to_read_index);
             match self.read_counters.compare_and_exchange_weak(read_counters, new_counters, Ordering::Release, Ordering::Relaxed) {
                 Ok(_) => {
                     break;
@@ -284,7 +298,7 @@ impl<T: Sized> AtomicRingBuffer<T> {
     pub fn size(&self) -> usize {
         let read_counters = self.read_counters.load(Ordering::SeqCst);
         let write_counters = self.write_counters.load(Ordering::SeqCst);
-        counter_size(read_counters, write_counters, self.cap_mask.wrapping_add(1))
+        counter_size(read_counters, write_counters, self.cap())
     }
 
 
@@ -295,9 +309,9 @@ impl<T: Sized> AtomicRingBuffer<T> {
     }
 
     /// Returns the maximum capacity of the ring buffer
-    #[inline]
+    #[inline(always)]
     pub fn cap(&self) -> usize {
-        return self.cap_mask.wrapping_add(1);
+        return unsafe { (*self.mem).len() };
     }
 
     /// Returns the remaining capacity of the ring buffer.
@@ -306,7 +320,7 @@ impl<T: Sized> AtomicRingBuffer<T> {
     pub fn remaining_cap(&self) -> usize {
         let read_counters = self.read_counters.load(Ordering::SeqCst);
         let write_counters = self.write_counters.load(Ordering::SeqCst);
-        let cap = self.cap_mask.wrapping_add(1);
+        let cap = self.cap();
         let read_index = read_counters.index();
         let write_index = write_counters.index();
         let size = if read_index <= write_index { write_index - read_index } else { write_index + cap - read_index };
@@ -323,13 +337,13 @@ impl<T: Sized> AtomicRingBuffer<T> {
     /// Returns the memory usage in bytes of the allocated region of the ring buffer.
     /// This does not include overhead.
     pub fn memory_usage(&self) -> usize {
-        unsafe { mem::size_of_val(&(*self.ptr)) }
+        unsafe { mem::size_of_val(&(*self.mem)) }
     }
 
     /// pop one element, but only if ringbuffer is full, used by push_overwrite
     fn remove_if_full(&self) -> Option<T> {
+        let cap_mask = self.cap_mask();
         let mut read_counters = self.read_counters.load(Ordering::Acquire);
-
         let mut to_read_index;
         loop {
             let read_in_process_count = read_counters.in_process_count();
@@ -346,7 +360,7 @@ impl<T: Sized> AtomicRingBuffer<T> {
             }
 
             to_read_index = read_counters.index();
-            if to_read_index.wrapping_add(1) & self.cap_mask == self.write_counters.load(Ordering::Acquire).index() {
+            if to_read_index.wrapping_add(1) & cap_mask == self.write_counters.load(Ordering::Acquire).index() {
                 return None;
             }
 
@@ -362,12 +376,12 @@ impl<T: Sized> AtomicRingBuffer<T> {
 
         let popped = unsafe {
             // Read Memory
-            ptr::read_unaligned(self.ptr.offset(to_read_index as isize))
+            ptr::read_unaligned(self.cell(to_read_index))
         };
 
         // Mark read as done
         loop {
-            let new_counters = read_counters.increment_done(self.cap_mask, to_read_index);
+            let new_counters = read_counters.increment_done(cap_mask, to_read_index);
 
             match self.read_counters.compare_and_exchange_weak(read_counters, new_counters, Ordering::Release, Ordering::Relaxed) {
                 Ok(_) => {
@@ -385,14 +399,14 @@ impl<T: Sized> AtomicRingBuffer<T> {
 impl<T> fmt::Debug for AtomicRingBuffer<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if f.alternate() {
-            let cap = self.cap_mask + 1;
+            let cap = self.cap();
             let read_counters = self.read_counters.load(Ordering::Relaxed);
             let write_counters = self.write_counters.load(Ordering::Relaxed);
             write!(f, "AtomicRingBuffer cap: {} size: {} read_index: {}, read_in_process_count: {}, read_done_count: {}, write_index: {}, write_in_process_count: {}, write_done_count: {}", cap, self.size(),
                    read_counters.index(), read_counters.in_process_count(), read_counters.done_count(),
                    write_counters.index(), write_counters.in_process_count(), write_counters.done_count())
         } else {
-            write!(f, "AtomicRingBuffer cap: {} size: {}", self.cap_mask + 1, self.size())
+            write!(f, "AtomicRingBuffer cap: {} size: {}", self.cap(), self.size())
         }
     }
 }
@@ -543,6 +557,8 @@ mod tests {
     #[test]
     pub fn test_pushpop() {
         let ring = super::AtomicRingBuffer::with_capacity(900);
+        panic!("memory usage {} bytes overhead, {} bytes allocated", ::std::mem::size_of_val(&ring), ring.memory_usage());
+        assert_eq!(1024, ring.cap());
         assert_eq!(None, ring.try_pop());
         ring.push_overwrite(1);
         assert_eq!(Some(1), ring.try_pop());
