@@ -17,7 +17,7 @@ use std::sync::atomic::{Ordering, spin_loop_hint};
 ///Downsides
 ///
 ///- growing/shrinking is not supported
-///- no blocking poll support
+///- no blocking poll support (see AtomicRingQueue for blocking poll support)
 ///- maximum capacity of (usize >> 16) entries
 ///- capacity is rounded up to the next power of 2
 ///
@@ -54,9 +54,6 @@ use std::sync::atomic::{Ordering, spin_loop_hint};
 ///
 ///
 ///
-///## Dependencies
-///
-///This package has no dependencies
 ///
 ///## Usage
 ///
@@ -64,7 +61,7 @@ use std::sync::atomic::{Ordering, spin_loop_hint};
 ///
 ///```toml
 ///[dependencies]
-///atomicring = "0.4.4"
+///atomicring = "0.5.0"
 ///```
 ///
 ///
@@ -557,7 +554,6 @@ mod tests {
     #[test]
     pub fn test_pushpop() {
         let ring = super::AtomicRingBuffer::with_capacity(900);
-        panic!("memory usage {} bytes overhead, {} bytes allocated", ::std::mem::size_of_val(&ring), ring.memory_usage());
         assert_eq!(1024, ring.cap());
         assert_eq!(None, ring.try_pop());
         ring.push_overwrite(1);

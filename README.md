@@ -1,4 +1,4 @@
-# AtomicRingBuffer
+# AtomicRingBuffer / AtomicRingQueue
  
 [![Build Status](https://travis-ci.org/eun-ice/atomicring.svg?branch=master)](https://travis-ci.org/eun-ice/atomicring)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/eun-ice/atomicring)
@@ -11,14 +11,14 @@ Upsides
 
 - fast, try_push and try_pop are O(1)
 - scales well even during heavy concurrency
-- only 4 words of memory overhead
+- AtomicRingBuffer has only 4 words of memory overhead (AtomicRingQueue has 6 words of overhead)
+- blocking pop supported via AtomicRingQueue 
 - no memory allocations after initial creation
 
 
 Downsides
 
 - growing/shrinking is not supported
-- no blocking poll support
 - maximum capacity of (usize >> 16) entries
 - capacity is rounded up to the next power of 2
 
@@ -54,10 +54,14 @@ In rare cases this can result in a race where multiple threads increment r_pend 
 If r_pend == 255 or w_pend == 255 a spinloop waits it to be <255 to continue. This rarely happens in practice, that's why this is called almost lock-free.
 
 
+## Structs
+
+This package provides ```AtomicRingBuffer``` without blocking pop support and ```AtomicRingQueue``` with blocking pop support.
+
 
 ## Dependencies
 
-This package has no dependencies
+This package depends on [parking_lot](https://github.com/Amanieu/parking_lot) for blocking support in AtomicRingQueue
 
 ## Usage
 
@@ -65,7 +69,7 @@ To use AtomicRingBuffer, add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-atomicring = "0.4.0"
+atomicring = "0.5.0"
 ```
 
 
