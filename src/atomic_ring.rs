@@ -96,10 +96,11 @@ pub struct AtomicRingBuffer<T: Sized> {
     mem: *mut [T],
 }
 
-/// Any particular `T` should never accessed concurrently, so T does not need to be Sync
 /// If T is Send, AtomicRingBuffer is Send + Sync
 unsafe impl<T: Send> Send for AtomicRingBuffer<T> {}
 
+/// Any particular `T` should never accessed concurrently, so T does not need to be Sync.
+/// If T is Send, AtomicRingBuffer is Send + Sync
 unsafe impl<T: Send> Sync for AtomicRingBuffer<T> {}
 
 const MAXIMUM_IN_PROGRESS: u8 = 16;

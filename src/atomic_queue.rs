@@ -26,10 +26,11 @@ pub struct AtomicRingQueue<T> {
     ring: AtomicRingBuffer<T>,
 }
 
-/// Any particular `T` should never accessed concurrently, so T does not need to be Sync
 /// If T is Send, AtomicRingQueue is Send + Sync
 unsafe impl<T: Send> Send for AtomicRingQueue<T> {}
 
+/// Any particular `T` should never accessed concurrently, so T does not need to be Sync.
+/// If T is Send, AtomicRingQueue is Send + Sync
 unsafe impl<T: Send> Sync for AtomicRingQueue<T> {}
 
 
