@@ -28,6 +28,7 @@ unsafe impl Send for SmallType {}
 unsafe impl Sync for SmallType {}
 
 #[allow(dead_code)]
+#[derive(Default)]
 struct MediumType {
     some1: [usize; 32],
 }
@@ -43,6 +44,7 @@ unsafe impl Send for MediumType {}
 unsafe impl Sync for MediumType {}
 
 
+#[derive(Default)]
 #[allow(dead_code)]
 struct LargeType {
     some1: [usize; 32],
@@ -74,6 +76,20 @@ fn bench_ring_singlethread_small(b: &mut Bencher) {
         }
     });
 }
+
+#[bench]
+fn bench_ring_singlethread_optionsmall(b: &mut Bencher) {
+    let ring: AtomicRingBuffer<Option<SmallType>> = AtomicRingBuffer::with_capacity(10000);
+    b.iter(|| {
+        for _ in 0..10000 {
+            let _ = ring.try_push(Default::default());
+        }
+        for _ in 0..10000 {
+            ring.try_pop();
+        }
+    });
+}
+
 
 #[bench]
 fn bench_ring_singlethread_medium(b: &mut Bencher) {

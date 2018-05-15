@@ -1,7 +1,7 @@
 use std::fmt;
 use std::mem;
 use std::ptr;
-use std::sync::atomic::{Ordering, spin_loop_hint};
+use std::sync::atomic::{AtomicUsize, Ordering, spin_loop_hint};
 
 
 ///A constant-size almost lock-free concurrent ring buffer
@@ -181,7 +181,6 @@ impl<T: Sized> AtomicRingBuffer<T> {
             let write_in_process_count = write_counters.in_process_count();
             // spin wait on 255 simultanous in progress writes
             if write_in_process_count == MAXIMUM_IN_PROGRESS {
-                //println!("write overflow");
                 spin_loop_hint();
                 write_counters = self.write_counters.load(Ordering::Acquire);
                 continue;
@@ -200,7 +199,7 @@ impl<T: Sized> AtomicRingBuffer<T> {
                     write_counters = new_counters;
                     break;
                 }
-                Err(n) => write_counters = n
+                Err(updated) => write_counters = updated
             };
         }
 
@@ -215,7 +214,7 @@ impl<T: Sized> AtomicRingBuffer<T> {
 
             match self.write_counters.compare_and_exchange_weak(write_counters, new_counters, Ordering::Release, Ordering::Relaxed) {
                 Ok(_) => return Ok(()),
-                Err(previous) => write_counters = previous
+                Err(updated) => write_counters = updated
             };
         }
     }
@@ -254,7 +253,6 @@ impl<T: Sized> AtomicRingBuffer<T> {
 
             // spin wait on 255 simultanous in progress reads
             if read_in_process_count == MAXIMUM_IN_PROGRESS {
-                //println!("read overflow");
                 spin_loop_hint();
                 read_counters = self.read_counters.load(Ordering::Acquire);
                 continue;
@@ -267,7 +265,7 @@ impl<T: Sized> AtomicRingBuffer<T> {
                     read_counters = new_counters;
                     break;
                 }
-                Err(n) => read_counters = n
+                Err(updated) => read_counters = updated
             };
         }
 
@@ -280,10 +278,8 @@ impl<T: Sized> AtomicRingBuffer<T> {
         loop {
             let new_counters = read_counters.increment_done(cap_mask, to_read_index);
             match self.read_counters.compare_and_exchange_weak(read_counters, new_counters, Ordering::Release, Ordering::Relaxed) {
-                Ok(_) => {
-                    break;
-                }
-                Err(n) => read_counters = n
+                Ok(_) => break,
+                Err(updated) => read_counters = updated
             };
         }
 
@@ -346,7 +342,6 @@ impl<T: Sized> AtomicRingBuffer<T> {
             let read_in_process_count = read_counters.in_process_count();
             // spin wait on 255 simultanous in progress writes
             if read_in_process_count == MAXIMUM_IN_PROGRESS {
-                //println!("write overflow");
                 spin_loop_hint();
                 read_counters = self.read_counters.load(Ordering::Acquire);
                 continue;
@@ -381,10 +376,8 @@ impl<T: Sized> AtomicRingBuffer<T> {
             let new_counters = read_counters.increment_done(cap_mask, to_read_index);
 
             match self.read_counters.compare_and_exchange_weak(read_counters, new_counters, Ordering::Release, Ordering::Relaxed) {
-                Ok(_) => {
-                    break;
-                }
-                Err(n) => read_counters = n
+                Ok(_) => break,
+                Err(updated) => read_counters = updated
             };
         }
 
@@ -472,13 +465,13 @@ impl Counters {
 
 
 struct CounterStore {
-    counters: ::std::sync::atomic::AtomicUsize,
+    counters: AtomicUsize,
 
 }
 
 impl CounterStore {
     pub fn new() -> CounterStore {
-        CounterStore { counters: ::std::sync::atomic::AtomicUsize::new(0) }
+        CounterStore { counters: AtomicUsize::new(0) }
     }
     #[inline(always)]
     pub fn load(&self, ordering: Ordering) -> Counters {
@@ -489,9 +482,9 @@ impl CounterStore {
         Counters(self.counters.compare_and_swap(old.0, new.0, ordering))
     }
     #[inline(always)]
-    pub fn compare_and_exchange_weak(&self, old: Counters, new: Counters, success: Ordering, failure: Ordering) -> Result<Counters, Counters> {
+    pub fn compare_and_exchange_weak(&self, old: Counters, new: Counters, success: Ordering, failure: Ordering) -> Result<(), Counters> {
         match self.counters.compare_exchange_weak(old.0, new.0, success, failure) {
-            Ok(_) => Ok(old),
+            Ok(_) => Ok(()),
             Err(previous) => Err(Counters(previous))
         }
     }
