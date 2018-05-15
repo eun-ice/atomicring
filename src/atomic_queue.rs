@@ -1,6 +1,7 @@
 use AtomicRingBuffer;
 use parking_lot::{Condvar, Mutex};
 use std::time::Instant;
+use std::time::Duration;
 
 ///A constant-size almost lock-free concurrent ring buffer with blocking poll support
 ///
@@ -62,15 +63,6 @@ impl<T> AtomicRingQueue<T> {
         self.condvar.notify_one()
     }
 
-    fn wait(&self) {
-        let mut lock = self.mutex.lock();
-        self.condvar.wait(&mut lock);
-    }
-    fn wait_until(&self, deadline: Instant) -> bool {
-        let mut lock = self.mutex.lock();
-        return self.condvar.wait_until(&mut lock, deadline).timed_out();
-    }
-
     /// Try to push an object to the atomic ring buffer.
     /// If the buffer has no capacity remaining, the pushed object will be returned to the caller as error.
     #[inline(always)]
@@ -122,7 +114,13 @@ impl<T> AtomicRingQueue<T> {
             if let Some(res) = self.spinning_pop() {
                 return res;
             }
-            self.wait();
+            {
+                let mut lock = self.mutex.lock();
+                if let Some(res) = self.try_pop() {
+                    return res;
+                }
+                self.condvar.wait(&mut lock);
+            }
         }
     }
 
@@ -133,11 +131,24 @@ impl<T> AtomicRingQueue<T> {
             if let res @ Some(_) = self.spinning_pop() {
                 return res;
             }
-            if self.wait_until(deadline) {
-                return None;
+            {
+                let mut lock = self.mutex.lock();
+                if let res @ Some(_) = self.try_pop() {
+                    return res;
+                }
+                if self.condvar.wait_until(&mut lock, deadline).timed_out() {
+                    return None;
+                }
             }
         }
     }
+
+    /// Pop an object from the ring buffer, waiting until the given instant if the buffer is empty. Returns None on timeout
+    #[inline]
+    pub fn pop_for(&self, timeout: Duration) -> Option<T> {
+        self.pop_until(Instant::now() + timeout)
+    }
+
 
     /// Returns the number of objects stored in the ring buffer that are not in process of being removed.
     #[inline]

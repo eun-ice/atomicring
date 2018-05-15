@@ -69,7 +69,7 @@ To use AtomicRingBuffer, add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-atomicring = "0.5.0"
+atomicring = "0.5.1"
 ```
 
 
