@@ -69,10 +69,10 @@ fn bench_ring_singlethread_small(b: &mut Bencher) {
     let ring: AtomicRingBuffer<SmallType> = AtomicRingBuffer::with_capacity(10000);
     b.iter(|| {
         for _ in 0..10000 {
-            let _ = ring.try_push(Default::default());
+            ring.try_push(Default::default()).ok().expect("!!");
         }
         for _ in 0..10000 {
-            ring.try_pop();
+            ring.try_pop().expect("!!");;
         }
     });
 }
@@ -82,10 +82,10 @@ fn bench_ring_singlethread_optionsmall(b: &mut Bencher) {
     let ring: AtomicRingBuffer<Option<SmallType>> = AtomicRingBuffer::with_capacity(10000);
     b.iter(|| {
         for _ in 0..10000 {
-            let _ = ring.try_push(Default::default());
+            let _ = ring.try_push(Default::default()).ok().expect("!!");;
         }
         for _ in 0..10000 {
-            ring.try_pop();
+            ring.try_pop().expect("!!");;
         }
     });
 }
@@ -96,10 +96,10 @@ fn bench_ring_singlethread_medium(b: &mut Bencher) {
     let ring: AtomicRingBuffer<MediumType> = AtomicRingBuffer::with_capacity(10000);
     b.iter(|| {
         for _ in 0..10000 {
-            let _ = ring.try_push(MediumType::new());
+            let _ = ring.try_push(MediumType::new()).ok().expect("!!");;
         }
         for _ in 0..10000 {
-            ring.try_pop();
+            ring.try_pop().expect("!!");;
         }
     });
 }
