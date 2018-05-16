@@ -1,4 +1,5 @@
 use std::fmt;
+use std::marker::PhantomData;
 use std::mem;
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering, spin_loop_hint};
@@ -61,7 +62,7 @@ use std::sync::atomic::{AtomicUsize, Ordering, spin_loop_hint};
 ///
 ///```toml
 ///[dependencies]
-///atomicring = "0.5.1"
+///atomicring = "0.5.4"
 ///```
 ///
 ///
@@ -94,6 +95,7 @@ pub struct AtomicRingBuffer<T: Sized> {
     #[cfg(not(feature = "index_access"))]
     ptr: *mut T,
     mem: *mut [T],
+    _marker: PhantomData<T>,
 }
 
 /// If T is Send, AtomicRingBuffer is Send + Sync
@@ -147,7 +149,7 @@ impl<T: Sized> AtomicRingBuffer<T> {
             mem,
             read_counters: CounterStore::new(),
             write_counters: CounterStore::new(),
-
+            _marker: PhantomData,
         }
     }
 
@@ -409,7 +411,8 @@ impl CounterStore {
     pub fn increment_done(&self, mut counters: Counters, index: usize, cap_mask: usize) {
         // ultra fast path: if we are first pending operation in line and nothing is done yet,
         // we can just increment index, decrement in_progress_count, preserve done_count without checking
-        if counters.index() == index && counters.done_count() == 0 {
+        // if counters.index()==index && counters.done_count()==0
+        if counters.0 & 0xFFFFFFFFFFFF00 == (index << 16) {
             if index < cap_mask {
                 // even if other operations are in progress
                 self.counters.fetch_add((1 << 16) - 1, Ordering::Release);
@@ -438,7 +441,6 @@ impl CounterStore {
             };
         }
     }
-
 }
 
 
