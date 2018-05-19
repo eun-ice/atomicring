@@ -92,8 +92,6 @@ use std::sync::atomic::{AtomicUsize, Ordering, spin_loop_hint};
 pub struct AtomicRingBuffer<T: Sized> {
     read_counters: CounterStore,
     write_counters: CounterStore,
-    #[cfg(not(feature = "index_access"))]
-    ptr: *mut T,
     mem: *mut [T],
     _marker: PhantomData<T>,
 }
@@ -106,6 +104,30 @@ unsafe impl<T: Send> Send for AtomicRingBuffer<T> {}
 unsafe impl<T: Send> Sync for AtomicRingBuffer<T> {}
 
 const MAXIMUM_IN_PROGRESS: u8 = 16;
+
+impl<T: Default> AtomicRingBuffer<T> {
+    #[inline(always)]
+    pub fn try_write<F: FnOnce(&mut T)>(&self, writer: F) -> Result<(), ()> {
+        let cap_mask = self.cap_mask();
+        let recheck = |to_write_index: usize, _: u8| { to_write_index.wrapping_add(1) & cap_mask == self.read_counters.load(Ordering::SeqCst).index() };
+
+        if let Ok((write_counters, to_write_index)) = self.write_counters.increment_in_progress(recheck, cap_mask) {
+
+            // write mem
+            unsafe {
+                let dst = self.cell(to_write_index);
+                ptr::write_unaligned(dst, Default::default());
+                writer(&mut (*dst));
+            }
+
+            // Mark write as done
+            self.write_counters.increment_done(write_counters, to_write_index, cap_mask);
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+}
 
 impl<T: Sized> AtomicRingBuffer<T> {
     /// Constructs a new empty AtomicRingBuffer<T> with the specified capacity
@@ -144,8 +166,6 @@ impl<T: Sized> AtomicRingBuffer<T> {
         let mem = Box::into_raw(content.into_boxed_slice());
 
         AtomicRingBuffer {
-            #[cfg(not(feature = "index_access"))]
-            ptr: unsafe { ::std::mem::transmute(&mut (*mem)[0]) },
             mem,
             read_counters: CounterStore::new(),
             write_counters: CounterStore::new(),
@@ -154,16 +174,8 @@ impl<T: Sized> AtomicRingBuffer<T> {
     }
 
     /// Returns a *mut T pointer to an indexed cell
-    #[cfg(feature = "index_access")]
     unsafe fn cell(&self, index: usize) -> *mut T {
         (&mut (*self.mem)[index])
-    }
-
-
-    /// Returns a *mut T pointer to an indexed cell
-    #[cfg(not(feature = "index_access"))]
-    unsafe fn cell(&self, index: usize) -> *mut T {
-        self.ptr.offset(index as isize)
     }
 
     /// Returns the capacity mask
@@ -230,6 +242,25 @@ impl<T: Sized> AtomicRingBuffer<T> {
             None
         }
     }
+    /// Pop an object from the ring buffer, returns None if the buffer is empty
+    #[inline]
+    pub fn read<U, F: FnOnce(&mut T) -> U>(&self, reader: F) -> Option<U> {
+        let cap_mask = self.cap_mask();
+
+
+        let recheck = |to_read_index: usize, _: u8| { to_read_index == self.write_counters.load(Ordering::SeqCst).index() };
+
+
+        if let Ok((read_counters, to_read_index)) = self.read_counters.increment_in_progress(recheck, cap_mask) {
+            let popped = unsafe { reader(&mut (*self.cell(to_read_index))) };
+
+            self.read_counters.increment_done(read_counters, to_read_index, cap_mask);
+            Some(popped)
+        } else {
+            None
+        }
+    }
+
 
     /// Returns the number of objects stored in the ring buffer that are not in process of being removed.
     #[inline]
