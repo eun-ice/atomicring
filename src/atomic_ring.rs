@@ -106,6 +106,7 @@ unsafe impl<T: Send> Sync for AtomicRingBuffer<T> {}
 const MAXIMUM_IN_PROGRESS: u8 = 16;
 
 impl<T: Default> AtomicRingBuffer<T> {
+    /// Write an object from the ring buffer, passing an &mut pointer to a given function to write to during transaction. The cell will be initialized with Default::default()
     #[inline(always)]
     pub fn try_write<F: FnOnce(&mut T)>(&self, writer: F) -> Result<(), ()> {
         let cap_mask = self.cap_mask();
@@ -206,6 +207,29 @@ impl<T: Sized> AtomicRingBuffer<T> {
         }
     }
 
+    /// Write an object from the ring buffer, passing an uninitialized *mut pointer to a given fuction to write to during transaction. The cell will *NOT* be initialized and has to be overwritten using ptr::write_unaligned!
+    #[inline(always)]
+    pub fn try_unsafe_write<F: FnOnce(*mut T)>(&self, writer: F) -> Result<(), ()> {
+        let cap_mask = self.cap_mask();
+        let recheck = |to_write_index: usize, _: u8| { to_write_index.wrapping_add(1) & cap_mask == self.read_counters.load(Ordering::SeqCst).index() };
+
+        if let Ok((write_counters, to_write_index)) = self.write_counters.increment_in_progress(recheck, cap_mask) {
+
+            // write mem
+            unsafe {
+                let dst = self.cell(to_write_index);
+                writer(dst);
+            }
+
+            // Mark write as done
+            self.write_counters.increment_done(write_counters, to_write_index, cap_mask);
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+
     /// Pushes an object to the atomic ring buffer.
     /// If the buffer is full, another object will be popped to make room for the new object.
     #[inline(always)]
@@ -242,9 +266,9 @@ impl<T: Sized> AtomicRingBuffer<T> {
             None
         }
     }
-    /// Pop an object from the ring buffer, returns None if the buffer is empty
+    /// Read an object from the ring buffer, passing an &mut pointer to a given function to read during transaction
     #[inline]
-    pub fn read<U, F: FnOnce(&mut T) -> U>(&self, reader: F) -> Option<U> {
+    pub fn try_read<U, F: FnOnce(&mut T) -> U>(&self, reader: F) -> Option<U> {
         let cap_mask = self.cap_mask();
 
 
@@ -252,8 +276,12 @@ impl<T: Sized> AtomicRingBuffer<T> {
 
 
         if let Ok((read_counters, to_read_index)) = self.read_counters.increment_in_progress(recheck, cap_mask) {
-            let popped = unsafe { reader(&mut (*self.cell(to_read_index))) };
-
+            let popped = unsafe {
+                let cell = self.cell(to_read_index);
+                let result = reader(&mut (*cell));
+                ptr::drop_in_place(cell);
+                result
+            };
             self.read_counters.increment_done(read_counters, to_read_index, cap_mask);
             Some(popped)
         } else {
@@ -707,7 +735,7 @@ mod tests {
     static DROP_COUNT: ::std::sync::atomic::AtomicUsize = ::std::sync::atomic::ATOMIC_USIZE_INIT;
 
     #[allow(dead_code)]
-    #[derive(Debug)]
+    #[derive(Debug, Default)]
     struct TestType {
         some: usize
     }
@@ -734,6 +762,34 @@ mod tests {
         assert_eq!(2, DROP_COUNT.load(::std::sync::atomic::Ordering::Relaxed));
     }
 
+    #[test]
+    pub fn test_inline_dropcount() {
+        DROP_COUNT.store(0, ::std::sync::atomic::Ordering::Relaxed);
+        {
+            let buf: super::AtomicRingBuffer<TestType> = super::AtomicRingBuffer::with_capacity(1024);
+            buf.try_write(|w| { w.some = 0 }).expect("push");
+            buf.try_write(|w| { w.some = 0 }).expect("push");
+
+            assert_eq!(0, DROP_COUNT.load(::std::sync::atomic::Ordering::Relaxed));
+            buf.try_read(|_| {});
+            assert_eq!(1, DROP_COUNT.load(::std::sync::atomic::Ordering::Relaxed));
+        }
+        assert_eq!(2, DROP_COUNT.load(::std::sync::atomic::Ordering::Relaxed));
+    }
+    #[test]
+    pub fn test_unsafe_dropcount() {
+        DROP_COUNT.store(0, ::std::sync::atomic::Ordering::Relaxed);
+        {
+            let buf: super::AtomicRingBuffer<TestType> = super::AtomicRingBuffer::with_capacity(1024);
+            buf.try_unsafe_write(|w| unsafe { ::std::ptr::write_unaligned(w, TestType{some:0})}).expect("push");
+            buf.try_unsafe_write(|w| unsafe { ::std::ptr::write_unaligned(w, TestType{some:0})}).expect("push");
+
+            assert_eq!(0, DROP_COUNT.load(::std::sync::atomic::Ordering::Relaxed));
+            buf.try_read(|_| {});
+            assert_eq!(1, DROP_COUNT.load(::std::sync::atomic::Ordering::Relaxed));
+        }
+        assert_eq!(2, DROP_COUNT.load(::std::sync::atomic::Ordering::Relaxed));
+    }
 
     fn pop_wait(buf: &::std::sync::Arc<super::AtomicRingBuffer<usize>>) -> usize {
         loop {

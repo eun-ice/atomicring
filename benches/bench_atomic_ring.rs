@@ -135,7 +135,7 @@ fn bench_ring_inline_singlethread_small(b: &mut Bencher) {
             ring.try_write(|w| { w.index = i }).ok().expect("!!");
         }
         for i in 0..10000 {
-            ring.read(|r| { assert_eq!(r.index, i) }).expect("!!");
+            ring.try_read(|r| { assert_eq!(r.index, i) }).expect("!!");
         }
     });
 }
@@ -148,7 +148,7 @@ fn bench_ring_inline_singlethread_optionsmall(b: &mut Bencher) {
             ring.try_write(|w| { *w = Some(SmallType::new(i)) }).ok().expect("!!");
         }
         for i in 0..10000 {
-            ring.read(|r| { assert_eq!(r.as_mut().unwrap().index, i) }).expect("!!");
+            ring.try_read(|r| { assert_eq!(r.as_mut().unwrap().index, i) }).expect("!!");
         }
     });
 }
@@ -162,7 +162,7 @@ fn bench_ring_inline_singlethread_medium(b: &mut Bencher) {
             ring.try_write(|w| { w.index = i }).ok().expect("!!");
         }
         for i in 0..10000 {
-            ring.read(|r| { assert_eq!(r.index, i) }).expect("!!");
+            ring.try_read(|r| { assert_eq!(r.index, i) }).expect("!!");
         }
     });
 }
@@ -173,10 +173,65 @@ fn bench_ring_inline_singlethread_large(b: &mut Bencher) {
     let ring: AtomicRingBuffer<LargeType> = AtomicRingBuffer::with_capacity(10000);
     b.iter(|| {
         for i in 0..10000 {
-            ring.try_write(|w| { w.index = i }).ok().expect("!!");
+            ring.try_unsafe_write(|w| unsafe { ::std::ptr::write_unaligned(w, LargeType::new(i)) }).ok().expect("!!");
         }
         for i in 0..10000 {
-            ring.read(|r| { assert_eq!(r.index, i) }).expect("!!");
+            ring.try_read(|r| { assert_eq!(r.index, i) }).expect("!!");
+        }
+    });
+}
+
+
+#[bench]
+fn bench_ring_unsafe_singlethread_small(b: &mut Bencher) {
+    let ring: AtomicRingBuffer<SmallType> = AtomicRingBuffer::with_capacity(10000);
+    b.iter(|| {
+        for i in 0..10000 {
+            ring.try_unsafe_write(|w| unsafe { ::std::ptr::write_unaligned(w, SmallType::new(i)) }).ok().expect("!!");
+        }
+        for i in 0..10000 {
+            ring.try_read(|r| { assert_eq!(r.index, i) }).expect("!!");
+        }
+    });
+}
+
+#[bench]
+fn bench_ring_unsafe_singlethread_optionsmall(b: &mut Bencher) {
+    let ring: AtomicRingBuffer<Option<SmallType>> = AtomicRingBuffer::with_capacity(10000);
+    b.iter(|| {
+        for i in 0..10000 {
+            ring.try_unsafe_write(|w| unsafe { ::std::ptr::write_unaligned(w, Some(SmallType::new(i))) }).ok().expect("!!");
+        }
+        for i in 0..10000 {
+            ring.try_read(|r| { assert_eq!(r.as_mut().unwrap().index, i) }).expect("!!");
+        }
+    });
+}
+
+
+#[bench]
+fn bench_ring_unsafe_singlethread_medium(b: &mut Bencher) {
+    let ring: AtomicRingBuffer<MediumType> = AtomicRingBuffer::with_capacity(10000);
+    b.iter(|| {
+        for i in 0..10000 {
+            ring.try_unsafe_write(|w| unsafe { ::std::ptr::write_unaligned(w, MediumType::new(i)) }).ok().expect("!!");
+        }
+        for i in 0..10000 {
+            ring.try_read(|r| { assert_eq!(r.index, i) }).expect("!!");
+        }
+    });
+}
+
+
+#[bench]
+fn bench_ring_unsafe_singlethread_large(b: &mut Bencher) {
+    let ring: AtomicRingBuffer<LargeType> = AtomicRingBuffer::with_capacity(10000);
+    b.iter(|| {
+        for i in 0..10000 {
+            ring.try_unsafe_write(|w| unsafe { ::std::ptr::write_unaligned(w, LargeType::new(i)) }).ok().expect("!!");
+        }
+        for i in 0..10000 {
+            ring.try_read(|r| { assert_eq!(r.index, i) }).expect("!!");
         }
     });
 }
