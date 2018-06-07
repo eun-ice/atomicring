@@ -153,12 +153,12 @@ impl<T> AtomicRingQueue<T> {
 
     /// Returns the number of objects stored in the ring buffer that are not in process of being removed.
     #[inline]
-    pub fn size(&self) -> usize {
-        self.ring.size()
+    pub fn len(&self) -> usize {
+        self.ring.len()
     }
 
 
-    /// Returns the true if ring buffer is empty. Equivalent to `self.size() == 0`
+    /// Returns the true if ring buffer is empty. Equivalent to `self.len() == 0`
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.ring.is_empty()
@@ -171,7 +171,7 @@ impl<T> AtomicRingQueue<T> {
     }
 
     /// Returns the remaining capacity of the ring buffer.
-    /// This is equal to `self.cap() - self.size() - pending writes + pending reads`.
+    /// This is equal to `self.cap() - self.len() - pending writes + pending reads`.
     #[inline]
     pub fn remaining_cap(&self) -> usize {
         self.ring.remaining_cap()
@@ -206,7 +206,7 @@ mod tests {
         for i in 0..199999 {
             ring.push_overwrite(i);
         }
-        assert_eq!(ring.cap(), ring.size() + 1);
+        assert_eq!(ring.cap(), ring.len() + 1);
         assert_eq!(199999 - (ring.cap() - 1), ring.pop());
         assert_eq!(Ok(()), ring.try_push(199999));
 
@@ -233,7 +233,7 @@ mod tests {
         for i in 0..200000 {
             ring.push_overwrite(i);
         }
-        assert_eq!(ring.cap(), ring.size() + 1);
+        assert_eq!(ring.cap(), ring.len() + 1);
 
         for i in 200000 - (ring.cap() - 1)..200000 {
             assert_eq!(i, ring.pop());
@@ -258,7 +258,7 @@ mod tests {
         for i in 0..200000 {
             ring.push_overwrite(i);
         }
-        assert_eq!(ring.cap(), ring.size() + 1);
+        assert_eq!(ring.cap(), ring.len() + 1);
 
         for i in 200000 - (ring.cap() - 1)..200000 {
             assert_eq!(i, ring.pop());
@@ -287,7 +287,7 @@ mod tests {
         for _i in 0..200000 {
             ring.push_overwrite(ZeroType {});
         }
-        assert_eq!(ring.cap(), ring.size() + 1);
+        assert_eq!(ring.cap(), ring.len() + 1);
 
         for _i in 200000 - (ring.cap() - 1)..200000 {
             assert_eq!(ZeroType {}, ring.pop());
@@ -322,7 +322,7 @@ mod tests {
             handle.join().expect("join");
         }
 
-        assert_eq!(arc.size(), cap);
+        assert_eq!(arc.len(), cap);
 
         let mut expected: Vec<usize> = Vec::new();
         let mut actual: Vec<usize> = Vec::new();

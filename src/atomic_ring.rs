@@ -62,7 +62,7 @@ use std::sync::atomic::{AtomicUsize, Ordering, spin_loop_hint};
 ///
 ///```toml
 ///[dependencies]
-///atomicring = "0.5.4"
+///atomicring = "1.0.0"
 ///```
 ///
 ///
@@ -110,9 +110,9 @@ impl<T: Default> AtomicRingBuffer<T> {
     #[inline(always)]
     pub fn try_write<F: FnOnce(&mut T)>(&self, writer: F) -> Result<(), ()> {
         let cap_mask = self.cap_mask();
-        let recheck = |to_write_index: usize, _: u8| { to_write_index.wrapping_add(1) & cap_mask == self.read_counters.load(Ordering::SeqCst).index() };
+        let error_condition = |to_write_index: usize, _: u8| { to_write_index.wrapping_add(1) & cap_mask == self.read_counters.load(Ordering::SeqCst).index() };
 
-        if let Ok((write_counters, to_write_index)) = self.write_counters.increment_in_progress(recheck, cap_mask) {
+        if let Ok((write_counters, to_write_index)) = self.write_counters.increment_in_progress(error_condition, cap_mask) {
 
             // write mem
             unsafe {
@@ -190,9 +190,9 @@ impl<T: Sized> AtomicRingBuffer<T> {
     #[inline(always)]
     pub fn try_push(&self, content: T) -> Result<(), T> {
         let cap_mask = self.cap_mask();
-        let recheck = |to_write_index: usize, _: u8| { to_write_index.wrapping_add(1) & cap_mask == self.read_counters.load(Ordering::SeqCst).index() };
+        let error_condition = |to_write_index: usize, _: u8| { to_write_index.wrapping_add(1) & cap_mask == self.read_counters.load(Ordering::SeqCst).index() };
 
-        if let Ok((write_counters, to_write_index)) = self.write_counters.increment_in_progress(recheck, cap_mask) {
+        if let Ok((write_counters, to_write_index)) = self.write_counters.increment_in_progress(error_condition, cap_mask) {
 
             // write mem
             unsafe {
@@ -211,9 +211,9 @@ impl<T: Sized> AtomicRingBuffer<T> {
     #[inline(always)]
     pub fn try_unsafe_write<F: FnOnce(*mut T)>(&self, writer: F) -> Result<(), ()> {
         let cap_mask = self.cap_mask();
-        let recheck = |to_write_index: usize, _: u8| { to_write_index.wrapping_add(1) & cap_mask == self.read_counters.load(Ordering::SeqCst).index() };
+        let error_condition = |to_write_index: usize, _: u8| { to_write_index.wrapping_add(1) & cap_mask == self.read_counters.load(Ordering::SeqCst).index() };
 
-        if let Ok((write_counters, to_write_index)) = self.write_counters.increment_in_progress(recheck, cap_mask) {
+        if let Ok((write_counters, to_write_index)) = self.write_counters.increment_in_progress(error_condition, cap_mask) {
 
             // write mem
             unsafe {
@@ -251,10 +251,10 @@ impl<T: Sized> AtomicRingBuffer<T> {
         let cap_mask = self.cap_mask();
 
 
-        let recheck = |to_read_index: usize, _: u8| { to_read_index == self.write_counters.load(Ordering::SeqCst).index() };
+        let error_condition = |to_read_index: usize, _: u8| { to_read_index == self.write_counters.load(Ordering::SeqCst).index() };
 
 
-        if let Ok((read_counters, to_read_index)) = self.read_counters.increment_in_progress(recheck, cap_mask) {
+        if let Ok((read_counters, to_read_index)) = self.read_counters.increment_in_progress(error_condition, cap_mask) {
             let popped = unsafe {
                 // Read Memory
                 ptr::read_unaligned(self.cell(to_read_index))
@@ -272,10 +272,10 @@ impl<T: Sized> AtomicRingBuffer<T> {
         let cap_mask = self.cap_mask();
 
 
-        let recheck = |to_read_index: usize, _: u8| { to_read_index == self.write_counters.load(Ordering::SeqCst).index() };
+        let error_condition = |to_read_index: usize, _: u8| { to_read_index == self.write_counters.load(Ordering::SeqCst).index() };
 
 
-        if let Ok((read_counters, to_read_index)) = self.read_counters.increment_in_progress(recheck, cap_mask) {
+        if let Ok((read_counters, to_read_index)) = self.read_counters.increment_in_progress(error_condition, cap_mask) {
             let popped = unsafe {
                 let cell = self.cell(to_read_index);
                 let result = reader(&mut (*cell));
@@ -292,17 +292,17 @@ impl<T: Sized> AtomicRingBuffer<T> {
 
     /// Returns the number of objects stored in the ring buffer that are not in process of being removed.
     #[inline]
-    pub fn size(&self) -> usize {
+    pub fn len(&self) -> usize {
         let read_counters = self.read_counters.load(Ordering::SeqCst);
         let write_counters = self.write_counters.load(Ordering::SeqCst);
-        counter_size(read_counters, write_counters, self.cap())
+        counter_len(read_counters, write_counters, self.cap())
     }
 
 
-    /// Returns the true if ring buffer is empty. Equivalent to `self.size() == 0`
+    /// Returns the true if ring buffer is empty. Equivalent to `self.len() == 0`
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.size() == 0
+        self.len() == 0
     }
 
     /// Returns the maximum capacity of the ring buffer
@@ -312,7 +312,7 @@ impl<T: Sized> AtomicRingBuffer<T> {
     }
 
     /// Returns the remaining capacity of the ring buffer.
-    /// This is equal to `self.cap() - self.size() - pending writes + pending reads`.
+    /// This is equal to `self.cap() - self.len() - pending writes + pending reads`.
     #[inline]
     pub fn remaining_cap(&self) -> usize {
         let read_counters = self.read_counters.load(Ordering::SeqCst);
@@ -320,9 +320,9 @@ impl<T: Sized> AtomicRingBuffer<T> {
         let cap = self.cap();
         let read_index = read_counters.index();
         let write_index = write_counters.index();
-        let size = if read_index <= write_index { write_index - read_index } else { write_index + cap - read_index };
-        //size is from read_index to write_index, but we have to substract write_in_process_count for a better remaining capacity approximation
-        cap - 1 - size - write_counters.in_process_count() as usize
+        let len = if read_index <= write_index { write_index - read_index } else { write_index + cap - read_index };
+        //len is from read_index to write_index, but we have to substract write_in_process_count for a better remaining capacity approximation
+        cap - 1 - len - write_counters.in_process_count() as usize
     }
 
     /// Pop everything from ring buffer and discard it.
@@ -342,10 +342,10 @@ impl<T: Sized> AtomicRingBuffer<T> {
         let cap_mask = self.cap_mask();
 
 
-        let recheck = |to_read_index: usize, read_in_process_count: u8| { read_in_process_count > 0 || to_read_index.wrapping_add(1) & cap_mask == self.write_counters.load(Ordering::Acquire).index() };
+        let error_condition = |to_read_index: usize, read_in_process_count: u8| { read_in_process_count > 0 || to_read_index.wrapping_add(1) & cap_mask == self.write_counters.load(Ordering::Acquire).index() };
 
 
-        if let Ok((read_counters, to_read_index)) = self.read_counters.increment_in_progress(recheck, cap_mask) {
+        if let Ok((read_counters, to_read_index)) = self.read_counters.increment_in_progress(error_condition, cap_mask) {
             let popped = unsafe {
                 // Read Memory
                 ptr::read_unaligned(self.cell(to_read_index))
@@ -367,11 +367,11 @@ impl<T> fmt::Debug for AtomicRingBuffer<T> {
             let cap = self.cap();
             let read_counters = self.read_counters.load(Ordering::Relaxed);
             let write_counters = self.write_counters.load(Ordering::Relaxed);
-            write!(f, "AtomicRingBuffer cap: {} size: {} read_index: {}, read_in_process_count: {}, read_done_count: {}, write_index: {}, write_in_process_count: {}, write_done_count: {}", cap, self.size(),
+            write!(f, "AtomicRingBuffer cap: {} len: {} read_index: {}, read_in_process_count: {}, read_done_count: {}, write_index: {}, write_in_process_count: {}, write_done_count: {}", cap, self.len(),
                    read_counters.index(), read_counters.in_process_count(), read_counters.done_count(),
                    write_counters.index(), write_counters.in_process_count(), write_counters.done_count())
         } else {
-            write!(f, "AtomicRingBuffer cap: {} size: {}", self.cap(), self.size())
+            write!(f, "AtomicRingBuffer cap: {} len: {}", self.cap(), self.len())
         }
     }
 }
@@ -409,12 +409,12 @@ impl From<Counters> for usize {
     }
 }
 
-fn counter_size(read_counters: Counters, write_counters: Counters, cap: usize) -> usize {
+fn counter_len(read_counters: Counters, write_counters: Counters, cap: usize) -> usize {
     let read_index = read_counters.index();
     let write_index = write_counters.index();
-    let size = if read_index <= write_index { write_index - read_index } else { write_index + cap - read_index };
-//size is from read_index to write_index, but we have to subtract read_in_process_count for a better size approximation
-    size - (read_counters.in_process_count() as usize)
+    let len = if read_index <= write_index { write_index - read_index } else { write_index + cap - read_index };
+//len is from read_index to write_index, but we have to subtract read_in_process_count for a better approximation
+    len - (read_counters.in_process_count() as usize)
 }
 
 
@@ -432,7 +432,7 @@ impl CounterStore {
         Counters(self.counters.load(ordering))
     }
     #[inline(always)]
-    pub fn increment_in_progress<F>(&self, recheck: F, cap_mask: usize) -> Result<(Counters, usize), ()>
+    pub fn increment_in_progress<F>(&self, error_condition: F, cap_mask: usize) -> Result<(Counters, usize), ()>
         where F: Fn(usize, u8) -> bool {
         /*        let counters = Counters(self.counters.fetch_add(1, Ordering::Acquire).wrapping_add(1));
                 return Ok((counters,counters.index() & cap_mask));
@@ -453,7 +453,7 @@ impl CounterStore {
 
             index = counters.index().wrapping_add(in_progress_count as usize) & cap_mask;
 
-            if recheck(index, in_progress_count) {
+            if error_condition(index, in_progress_count) {
                 return Err(());
             }
 
@@ -524,63 +524,63 @@ mod tests {
         let cap_mask = 0xf;
 
 
-        let recheck = |_, _| { false };
+        let error_condition = |_, _| { false };
         for i in 0..8 {
             let read_counters = read_counter_store.load(super::Ordering::Relaxed);
             let write_counters = write_counter_store.load(super::Ordering::Relaxed);
-            assert_eq!((0, (0 + i * 3) % 16, 0, 0, (0 + i * 3) % 16, 0, 0), (super::counter_size(read_counters, write_counters, cap), read_counters.index(), read_counters.in_process_count(), read_counters.done_count(), write_counters.index(), write_counters.in_process_count(), write_counters.done_count()));
+            assert_eq!((0, (0 + i * 3) % 16, 0, 0, (0 + i * 3) % 16, 0, 0), (super::counter_len(read_counters, write_counters, cap), read_counters.index(), read_counters.in_process_count(), read_counters.done_count(), write_counters.index(), write_counters.in_process_count(), write_counters.done_count()));
 
-            write_counter_store.increment_in_progress(recheck, cap_mask).expect("..");
+            write_counter_store.increment_in_progress(error_condition, cap_mask).expect("..");
             let read_counters = read_counter_store.load(super::Ordering::Relaxed);
             let write_counters = write_counter_store.load(super::Ordering::Relaxed);
-            assert_eq!((0, (0 + i * 3) % 16, 0, 0, (0 + i * 3) % 16, 1, 0), (super::counter_size(read_counters, write_counters, cap), read_counters.index(), read_counters.in_process_count(), read_counters.done_count(), write_counters.index(), write_counters.in_process_count(), write_counters.done_count()));
+            assert_eq!((0, (0 + i * 3) % 16, 0, 0, (0 + i * 3) % 16, 1, 0), (super::counter_len(read_counters, write_counters, cap), read_counters.index(), read_counters.in_process_count(), read_counters.done_count(), write_counters.index(), write_counters.in_process_count(), write_counters.done_count()));
 
-            write_counter_store.increment_in_progress(recheck, cap_mask).expect("..");
+            write_counter_store.increment_in_progress(error_condition, cap_mask).expect("..");
             let read_counters = read_counter_store.load(super::Ordering::Relaxed);
             let write_counters = write_counter_store.load(super::Ordering::Relaxed);
-            assert_eq!((0, (0 + i * 3) % 16, 0, 0, (0 + i * 3) % 16, 2, 0), (super::counter_size(read_counters, write_counters, cap), read_counters.index(), read_counters.in_process_count(), read_counters.done_count(), write_counters.index(), write_counters.in_process_count(), write_counters.done_count()));
-            write_counter_store.increment_in_progress(recheck, cap_mask).expect("..");
+            assert_eq!((0, (0 + i * 3) % 16, 0, 0, (0 + i * 3) % 16, 2, 0), (super::counter_len(read_counters, write_counters, cap), read_counters.index(), read_counters.in_process_count(), read_counters.done_count(), write_counters.index(), write_counters.in_process_count(), write_counters.done_count()));
+            write_counter_store.increment_in_progress(error_condition, cap_mask).expect("..");
             let read_counters = read_counter_store.load(super::Ordering::Relaxed);
             let write_counters = write_counter_store.load(super::Ordering::Relaxed);
-            assert_eq!((0, (0 + i * 3) % 16, 0, 0, (0 + i * 3) % 16, 3, 0), (super::counter_size(read_counters, write_counters, cap), read_counters.index(), read_counters.in_process_count(), read_counters.done_count(), write_counters.index(), write_counters.in_process_count(), write_counters.done_count()));
+            assert_eq!((0, (0 + i * 3) % 16, 0, 0, (0 + i * 3) % 16, 3, 0), (super::counter_len(read_counters, write_counters, cap), read_counters.index(), read_counters.in_process_count(), read_counters.done_count(), write_counters.index(), write_counters.in_process_count(), write_counters.done_count()));
             write_counter_store.increment_done(write_counters, (0 + i * 3) % 16, cap_mask);
             let read_counters = read_counter_store.load(super::Ordering::Relaxed);
             let write_counters = write_counter_store.load(super::Ordering::Relaxed);
-            assert_eq!((1, (0 + i * 3) % 16, 0, 0, (1 + i * 3) % 16, 2, 0), (super::counter_size(read_counters, write_counters, cap), read_counters.index(), read_counters.in_process_count(), read_counters.done_count(), write_counters.index(), write_counters.in_process_count(), write_counters.done_count()));
+            assert_eq!((1, (0 + i * 3) % 16, 0, 0, (1 + i * 3) % 16, 2, 0), (super::counter_len(read_counters, write_counters, cap), read_counters.index(), read_counters.in_process_count(), read_counters.done_count(), write_counters.index(), write_counters.in_process_count(), write_counters.done_count()));
             write_counter_store.increment_done(write_counters, (2 + i * 3) % 16, cap_mask);
             let read_counters = read_counter_store.load(super::Ordering::Relaxed);
             let write_counters = write_counter_store.load(super::Ordering::Relaxed);
-            assert_eq!((1, (0 + i * 3) % 16, 0, 0, (1 + i * 3) % 16, 2, 1), (super::counter_size(read_counters, write_counters, cap), read_counters.index(), read_counters.in_process_count(), read_counters.done_count(), write_counters.index(), write_counters.in_process_count(), write_counters.done_count()));
+            assert_eq!((1, (0 + i * 3) % 16, 0, 0, (1 + i * 3) % 16, 2, 1), (super::counter_len(read_counters, write_counters, cap), read_counters.index(), read_counters.in_process_count(), read_counters.done_count(), write_counters.index(), write_counters.in_process_count(), write_counters.done_count()));
             write_counter_store.increment_done(write_counters, (1 + i * 3) % 16, cap_mask);
             let read_counters = read_counter_store.load(super::Ordering::Relaxed);
             let write_counters = write_counter_store.load(super::Ordering::Relaxed);
-            assert_eq!((3, (0 + i * 3) % 16, 0, 0, (3 + i * 3) % 16, 0, 0), (super::counter_size(read_counters, write_counters, cap), read_counters.index(), read_counters.in_process_count(), read_counters.done_count(), write_counters.index(), write_counters.in_process_count(), write_counters.done_count()));
+            assert_eq!((3, (0 + i * 3) % 16, 0, 0, (3 + i * 3) % 16, 0, 0), (super::counter_len(read_counters, write_counters, cap), read_counters.index(), read_counters.in_process_count(), read_counters.done_count(), write_counters.index(), write_counters.in_process_count(), write_counters.done_count()));
 
-            read_counter_store.increment_in_progress(recheck, cap_mask).expect("..");
+            read_counter_store.increment_in_progress(error_condition, cap_mask).expect("..");
             let read_counters = read_counter_store.load(super::Ordering::Relaxed);
             let write_counters = write_counter_store.load(super::Ordering::Relaxed);
-            assert_eq!((2, (0 + i * 3) % 16, 1, 0, (3 + i * 3) % 16, 0, 0), (super::counter_size(read_counters, write_counters, cap), read_counters.index(), read_counters.in_process_count(), read_counters.done_count(), write_counters.index(), write_counters.in_process_count(), write_counters.done_count()));
-            read_counter_store.increment_in_progress(recheck, cap_mask).expect("..");
+            assert_eq!((2, (0 + i * 3) % 16, 1, 0, (3 + i * 3) % 16, 0, 0), (super::counter_len(read_counters, write_counters, cap), read_counters.index(), read_counters.in_process_count(), read_counters.done_count(), write_counters.index(), write_counters.in_process_count(), write_counters.done_count()));
+            read_counter_store.increment_in_progress(error_condition, cap_mask).expect("..");
             let read_counters = read_counter_store.load(super::Ordering::Relaxed);
             let write_counters = write_counter_store.load(super::Ordering::Relaxed);
-            assert_eq!((1, (0 + i * 3) % 16, 2, 0, (3 + i * 3) % 16, 0, 0), (super::counter_size(read_counters, write_counters, cap), read_counters.index(), read_counters.in_process_count(), read_counters.done_count(), write_counters.index(), write_counters.in_process_count(), write_counters.done_count()));
-            read_counter_store.increment_in_progress(recheck, cap_mask).expect("..");
+            assert_eq!((1, (0 + i * 3) % 16, 2, 0, (3 + i * 3) % 16, 0, 0), (super::counter_len(read_counters, write_counters, cap), read_counters.index(), read_counters.in_process_count(), read_counters.done_count(), write_counters.index(), write_counters.in_process_count(), write_counters.done_count()));
+            read_counter_store.increment_in_progress(error_condition, cap_mask).expect("..");
             let read_counters = read_counter_store.load(super::Ordering::Relaxed);
             let write_counters = write_counter_store.load(super::Ordering::Relaxed);
-            assert_eq!((0, (0 + i * 3) % 16, 3, 0, (3 + i * 3) % 16, 0, 0), (super::counter_size(read_counters, write_counters, cap), read_counters.index(), read_counters.in_process_count(), read_counters.done_count(), write_counters.index(), write_counters.in_process_count(), write_counters.done_count()));
+            assert_eq!((0, (0 + i * 3) % 16, 3, 0, (3 + i * 3) % 16, 0, 0), (super::counter_len(read_counters, write_counters, cap), read_counters.index(), read_counters.in_process_count(), read_counters.done_count(), write_counters.index(), write_counters.in_process_count(), write_counters.done_count()));
             read_counter_store.increment_done(read_counters, (1 + i * 3) % 16, cap_mask);
 
             let read_counters = read_counter_store.load(super::Ordering::Relaxed);
             let write_counters = write_counter_store.load(super::Ordering::Relaxed);
-            assert_eq!((0, (0 + i * 3) % 16, 3, 1, (3 + i * 3) % 16, 0, 0), (super::counter_size(read_counters, write_counters, cap), read_counters.index(), read_counters.in_process_count(), read_counters.done_count(), write_counters.index(), write_counters.in_process_count(), write_counters.done_count()));
+            assert_eq!((0, (0 + i * 3) % 16, 3, 1, (3 + i * 3) % 16, 0, 0), (super::counter_len(read_counters, write_counters, cap), read_counters.index(), read_counters.in_process_count(), read_counters.done_count(), write_counters.index(), write_counters.in_process_count(), write_counters.done_count()));
             read_counter_store.increment_done(read_counters, (0 + i * 3) % 16, cap_mask);
             let read_counters = read_counter_store.load(super::Ordering::Relaxed);
             let write_counters = write_counter_store.load(super::Ordering::Relaxed);
-            assert_eq!((0, (1 + i * 3) % 16, 2, 1, (3 + i * 3) % 16, 0, 0), (super::counter_size(read_counters, write_counters, cap), read_counters.index(), read_counters.in_process_count(), read_counters.done_count(), write_counters.index(), write_counters.in_process_count(), write_counters.done_count()));
+            assert_eq!((0, (1 + i * 3) % 16, 2, 1, (3 + i * 3) % 16, 0, 0), (super::counter_len(read_counters, write_counters, cap), read_counters.index(), read_counters.in_process_count(), read_counters.done_count(), write_counters.index(), write_counters.in_process_count(), write_counters.done_count()));
             read_counter_store.increment_done(read_counters, (2 + i * 3) % 16, cap_mask);
             let read_counters = read_counter_store.load(super::Ordering::Relaxed);
             let write_counters = write_counter_store.load(super::Ordering::Relaxed);
-            assert_eq!((0, (3 + i * 3) % 16, 0, 0, (3 + i * 3) % 16, 0, 0), (super::counter_size(read_counters, write_counters, cap), read_counters.index(), read_counters.in_process_count(), read_counters.done_count(), write_counters.index(), write_counters.in_process_count(), write_counters.done_count()));
+            assert_eq!((0, (3 + i * 3) % 16, 0, 0, (3 + i * 3) % 16, 0, 0), (super::counter_len(read_counters, write_counters, cap), read_counters.index(), read_counters.in_process_count(), read_counters.done_count(), write_counters.index(), write_counters.in_process_count(), write_counters.done_count()));
         }
     }
 
@@ -603,7 +603,7 @@ mod tests {
         for i in 0..199999 {
             ring.push_overwrite(i);
         }
-        assert_eq!(ring.cap(), ring.size() + 1);
+        assert_eq!(ring.cap(), ring.len() + 1);
         assert_eq!(199999 - (ring.cap() - 1), ring.try_pop().unwrap());
         assert_eq!(Ok(()), ring.try_push(199999));
 
@@ -630,7 +630,7 @@ mod tests {
         for i in 0..200000 {
             ring.push_overwrite(i);
         }
-        assert_eq!(ring.cap(), ring.size() + 1);
+        assert_eq!(ring.cap(), ring.len() + 1);
 
         for i in 200000 - (ring.cap() - 1)..200000 {
             assert_eq!(i, ring.try_pop().unwrap());
@@ -655,7 +655,7 @@ mod tests {
         for i in 0..200000 {
             ring.push_overwrite(i);
         }
-        assert_eq!(ring.cap(), ring.size() + 1);
+        assert_eq!(ring.cap(), ring.len() + 1);
 
         for i in 200000 - (ring.cap() - 1)..200000 {
             assert_eq!(i, ring.try_pop().unwrap());
@@ -685,7 +685,7 @@ mod tests {
         for _i in 0..200000 {
             ring.push_overwrite(ZeroType {});
         }
-        assert_eq!(ring.cap(), ring.size() + 1);
+        assert_eq!(ring.cap(), ring.len() + 1);
 
         for _i in 200000 - (ring.cap() - 1)..200000 {
             assert_eq!(ZeroType {}, ring.try_pop().unwrap());
@@ -720,7 +720,7 @@ mod tests {
             handle.join().expect("join");
         }
 
-        assert_eq!(arc.size(), cap);
+        assert_eq!(arc.len(), cap);
 
         let mut expected: Vec<usize> = Vec::new();
         let mut actual: Vec<usize> = Vec::new();
@@ -776,13 +776,14 @@ mod tests {
         }
         assert_eq!(2, DROP_COUNT.load(::std::sync::atomic::Ordering::Relaxed));
     }
+
     #[test]
     pub fn test_unsafe_dropcount() {
         DROP_COUNT.store(0, ::std::sync::atomic::Ordering::Relaxed);
         {
             let buf: super::AtomicRingBuffer<TestType> = super::AtomicRingBuffer::with_capacity(1024);
-            buf.try_unsafe_write(|w| unsafe { ::std::ptr::write_unaligned(w, TestType{some:0})}).expect("push");
-            buf.try_unsafe_write(|w| unsafe { ::std::ptr::write_unaligned(w, TestType{some:0})}).expect("push");
+            buf.try_unsafe_write(|w| unsafe { ::std::ptr::write_unaligned(w, TestType { some: 0 }) }).expect("push");
+            buf.try_unsafe_write(|w| unsafe { ::std::ptr::write_unaligned(w, TestType { some: 0 }) }).expect("push");
 
             assert_eq!(0, DROP_COUNT.load(::std::sync::atomic::Ordering::Relaxed));
             buf.try_read(|_| {});
