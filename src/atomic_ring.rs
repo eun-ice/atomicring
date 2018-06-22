@@ -266,7 +266,13 @@ impl<T: Sized> AtomicRingBuffer<T> {
             None
         }
     }
-    /// Read an object from the ring buffer, passing an &mut pointer to a given function to read during transaction
+
+    /// Read an object from the ring buffer, passing an &mut pointer to a given function to read during transaction.
+    ///
+    /// The given function is called with a mutable reference to the cell, and then the content in the cell is dropped
+    ///
+    /// If you do not want the content to be dropped, you can use std::mem::replace to replace the content of the cell with some default value (which will then be dropped)
+    /// or just use try_pop()
     #[inline]
     pub fn try_read<U, F: FnOnce(&mut T) -> U>(&self, reader: F) -> Option<U> {
         let cap_mask = self.cap_mask();
