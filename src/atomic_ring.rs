@@ -599,6 +599,7 @@ mod tests {
         assert_eq!(Some(1), ring.try_pop());
         assert_eq!(None, ring.try_pop());
 
+        // Test push in an empty buffer
         for i in 0..5000 {
             ring.push_overwrite(i);
             assert_eq!(Some(i), ring.try_pop());
@@ -606,6 +607,7 @@ mod tests {
         }
 
 
+        // Test push in a full buffer
         for i in 0..199999 {
             ring.push_overwrite(i);
         }
@@ -615,6 +617,17 @@ mod tests {
 
         for i in 200000 - (ring.cap() - 1)..200000 {
             assert_eq!(i, ring.try_pop().unwrap());
+        }
+
+        // Test push in an almost full buffer
+        for i in 0..1023 {
+            ring.try_push(i).expect("push")
+        }
+        assert_eq!(1024, ring.cap());
+        assert_eq!(1023, ring.len());
+        for i in 0..1023 {
+            assert_eq!(ring.try_pop(), Some(i));
+            ring.try_push(i).expect("push")
         }
     }
 
@@ -717,6 +730,8 @@ mod tests {
                 while ::std::time::Instant::now() < end {
                     let a = pop_wait(&buf);
                     let b = pop_wait(&buf);
+                    //buf.try_push(a).expect("push");
+                    //buf.try_push(b).expect("push");
                     while let Err(_) = buf.try_push(a) {};
                     while let Err(_) = buf.try_push(b) {};
                 }
