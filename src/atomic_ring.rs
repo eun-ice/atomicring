@@ -62,7 +62,7 @@ use std::sync::atomic::{AtomicUsize, Ordering, spin_loop_hint};
 ///
 ///```toml
 ///[dependencies]
-///atomicring = "1.0.0"
+///atomicring = "1.0.2"
 ///```
 ///
 ///
@@ -314,7 +314,7 @@ impl<T: Sized> AtomicRingBuffer<T> {
     /// Returns the maximum capacity of the ring buffer
     #[inline(always)]
     pub fn cap(&self) -> usize {
-        return unsafe { (*self.mem).len() };
+        unsafe { (*self.mem).len() }
     }
 
     /// Returns the remaining capacity of the ring buffer.
@@ -388,17 +388,17 @@ pub struct Counters(usize);
 
 impl Counters {
     #[inline(always)]
-    fn index(&self) -> usize {
+    fn index(self) -> usize {
         self.0 >> 16
     }
 
     #[inline(always)]
-    fn in_process_count(&self) -> u8 {
+    fn in_process_count(self) -> u8 {
         self.0 as u8
     }
 
     #[inline(always)]
-    fn done_count(&self) -> u8 {
+    fn done_count(self) -> u8 {
         (self.0 >> 8) as u8
     }
 }
@@ -477,12 +477,10 @@ impl CounterStore {
         // ultra fast path: if we are first pending operation in line and nothing is done yet,
         // we can just increment index, decrement in_progress_count, preserve done_count without checking
         // if counters.index()==index && counters.done_count()==0
-        if counters.0 & 0xFFFFFFFFFFFF00 == (index << 16) {
-            if index < cap_mask {
-                // even if other operations are in progress
-                self.counters.fetch_add((1 << 16) - 1, Ordering::Release);
-                return;
-            }
+        if (counters.0 & 0x00FF_FFFF_FFFF_FF00 == (index << 16)) && (index < cap_mask) {
+            // even if other operations are in progress
+            self.counters.fetch_add((1 << 16) - 1, Ordering::Release);
+            return;
         }
 
         loop {
