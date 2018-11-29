@@ -61,7 +61,7 @@ impl<T> AtomicRingQueue<T> {
 
     fn trigger(&self) {
         let _ = self.mutex.lock();
-        self.condvar.notify_one()
+        self.condvar.notify_one();
     }
 
     /// Try to push an object to the atomic ring buffer.
