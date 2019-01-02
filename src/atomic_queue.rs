@@ -1,4 +1,4 @@
-use AtomicRingBuffer;
+use crate::AtomicRingBuffer;
 use parking_lot::{Condvar, Mutex};
 use std::time::Instant;
 use std::time::Duration;

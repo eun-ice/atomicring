@@ -62,7 +62,7 @@ use std::sync::atomic::{AtomicUsize, Ordering, spin_loop_hint};
 ///
 ///```toml
 ///[dependencies]
-///atomicring = "1.0.2"
+///atomicring = "1.0.5"
 ///```
 ///
 ///
