@@ -1,7 +1,9 @@
-use crate::AtomicRingBuffer;
-use parking_lot::{Condvar, Mutex};
-use std::time::Instant;
 use std::time::Duration;
+use std::time::Instant;
+
+use parking_lot::{Condvar, Mutex};
+
+use crate::AtomicRingBuffer;
 
 ///A constant-size almost lock-free concurrent ring buffer with blocking poll support
 ///
@@ -164,7 +166,8 @@ impl<T> AtomicRingQueue<T> {
         self.ring.is_empty()
     }
 
-    /// Returns the maximum capacity of the ring buffer
+    /// Returns the maximum capacity of the ring buffer.
+    /// Attention: In fact you can store one element less than the cap given here
     #[inline(always)]
     pub fn cap(&self) -> usize {
         self.ring.cap()

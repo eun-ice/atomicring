@@ -4,7 +4,6 @@ use std::mem;
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering, spin_loop_hint};
 
-
 ///A constant-size almost lock-free concurrent ring buffer
 ///
 ///Upsides
@@ -62,7 +61,7 @@ use std::sync::atomic::{AtomicUsize, Ordering, spin_loop_hint};
 ///
 ///```toml
 ///[dependencies]
-///atomicring = "1.0.5"
+///atomicring = "1.1.0"
 ///```
 ///
 ///
@@ -70,7 +69,7 @@ use std::sync::atomic::{AtomicUsize, Ordering, spin_loop_hint};
 ///
 ///```rust
 ///
-///// create an AtomicRingBuffer with capacity of 1024 elements 
+///// create an AtomicRingBuffer with capacity of 1023 elements (next power of two -1)
 ///let ring = ::atomicring::AtomicRingBuffer::with_capacity(900);
 ///
 ///// try_pop removes an element of the buffer and returns None if the buffer is empty
@@ -109,36 +108,24 @@ impl<T: Default> AtomicRingBuffer<T> {
     /// Write an object from the ring buffer, passing an &mut pointer to a given function to write to during transaction. The cell will be initialized with Default::default()
     #[inline(always)]
     pub fn try_write<F: FnOnce(&mut T)>(&self, writer: F) -> Result<(), ()> {
-        let cap_mask = self.cap_mask();
-        let error_condition = |to_write_index: usize, _: u8| { to_write_index.wrapping_add(1) & cap_mask == self.read_counters.load(Ordering::SeqCst).index() };
-
-        if let Ok((write_counters, to_write_index)) = self.write_counters.increment_in_progress(error_condition, cap_mask) {
-
-            // write mem
-            unsafe {
-                let dst = self.cell(to_write_index);
-                ptr::write_unaligned(dst, Default::default());
-                writer(&mut (*dst));
-            }
-
-            // Mark write as done
-            self.write_counters.increment_done(write_counters, to_write_index, cap_mask);
-            Ok(())
-        } else {
-            Err(())
-        }
+        self.try_unsafe_write(|cell| unsafe {
+            ptr::write_unaligned(cell, Default::default());
+            writer(&mut (*cell));
+        })
     }
 }
 
 impl<T: Sized> AtomicRingBuffer<T> {
     /// Constructs a new empty AtomicRingBuffer<T> with the specified capacity
-    /// the capacity is rounded up to the next power of 2
+    /// the capacity is rounded up to the next power of 2 -1
     ///
     /// # Examples
     ///
     ///```
-    /// // create an AtomicRingBuffer with capacity of 1024 elements
+    /// // create an AtomicRingBuffer with capacity of 1023 elements (next power of 2 from the given capacity)
     /// let ring = ::atomicring::AtomicRingBuffer::with_capacity(900);
+    ///
+    /// assert_eq!(1023, ring.remaining_cap());
     ///
     /// // try_pop removes an element of the buffer and returns None if the buffer is empty
     /// assert_eq!(None, ring.try_pop());
@@ -174,109 +161,239 @@ impl<T: Sized> AtomicRingBuffer<T> {
         }
     }
 
-    /// Returns a *mut T pointer to an indexed cell
-    unsafe fn cell(&self, index: usize) -> *mut T {
-        (&mut (*self.mem)[index])
-    }
-
-    /// Returns the capacity mask
-    #[inline(always)]
-    fn cap_mask(&self) -> usize {
-        self.cap() - 1
-    }
 
     /// Try to push an object to the atomic ring buffer.
     /// If the buffer has no capacity remaining, the pushed object will be returned to the caller as error.
+    ///
+    /// # Examples
+    ///
+    ///```
+    /// // create an AtomicRingBuffer with capacity of 3 elements
+    /// let ring = ::atomicring::AtomicRingBuffer::with_capacity(3);
+    /// assert_eq!(3, ring.remaining_cap());
+    ///
+    /// // try_push adds an element to the buffer, if there is room
+    /// assert_eq!(Ok(()), ring.try_push(10));
+    /// assert_eq!(Some(10), ring.try_pop());
+    /// assert_eq!(None, ring.try_pop());
+    ///
+    /// for i in 0..3 {
+    ///     assert_eq!(Ok(()), ring.try_push(i));
+    /// }
+    ///
+    /// // try_push returns the element to the caller if the buffer is full
+    /// assert_eq!(Err(3), ring.try_push(3));
+    ///
+    /// // existing values remain in the ring buffer
+    /// for i in 0..3 {
+    ///     assert_eq!(Some(i), ring.try_pop());
+    /// }
+    ///```
     #[inline(always)]
     pub fn try_push(&self, content: T) -> Result<(), T> {
-        let cap_mask = self.cap_mask();
-        let error_condition = |to_write_index: usize, _: u8| { to_write_index.wrapping_add(1) & cap_mask == self.read_counters.load(Ordering::SeqCst).index() };
-
-        if let Ok((write_counters, to_write_index)) = self.write_counters.increment_in_progress(error_condition, cap_mask) {
-
-            // write mem
-            unsafe {
-                ptr::write_unaligned(self.cell(to_write_index), content);
-            }
-
-            // Mark write as done
-            self.write_counters.increment_done(write_counters, to_write_index, cap_mask);
-            Ok(())
-        } else {
-            Err(content)
-        }
+        self.try_unsafe_write_or(content, |cell, content| { unsafe { ptr::write_unaligned(cell, content); } }, |content| { content })
     }
 
-    /// Write an object from the ring buffer, passing an uninitialized *mut pointer to a given fuction to write to during transaction. The cell will *NOT* be initialized and has to be overwritten using ptr::write_unaligned!
+    /// Write an object from the ring buffer, passing an uninitialized *mut pointer to a given fuction to write to during transaction.
+    ///
+    /// The content of the cell will *NOT* be initialized and has to be overwritten using ptr::write_unaligned.
+    ///
+    /// The writer function is called once if there is room in the buffer
+    ///
+    /// # Examples
+    ///
+    ///```
+    /// // create an AtomicRingBuffer with capacity of 7 elements  (next power of 2 -1 from the given capacity)
+    /// let ring = ::atomicring::AtomicRingBuffer::with_capacity(5);
+    /// assert_eq!(7, ring.remaining_cap());
+    ///
+    /// // try_unsafe_write adds an element to the buffer, if there is room
+    /// assert_eq!(Ok(()), ring.try_unsafe_write(|cell| unsafe { ::std::ptr::write_unaligned(cell, 10) }));
+    /// assert_eq!(Some(10), ring.try_pop());
+    /// assert_eq!(None, ring.try_pop());
+    ///
+    /// for i in 0..7 {
+    ///     assert_eq!(Ok(()), ring.try_unsafe_write(|cell| unsafe { ::std::ptr::write_unaligned(cell, i) }));
+    /// }
+    ///
+    /// // try_unsafe_write returns an error to the caller if the buffer is full
+    /// assert_eq!(Err(()), ring.try_unsafe_write(|cell| unsafe { ::std::ptr::write_unaligned(cell, 7) }));
+    ///
+    /// // existing values remain in the ring buffer
+    /// for i in 0..7 {
+    ///     assert_eq!(Some(i), ring.try_pop());
+    /// }
+    ///```
     #[inline(always)]
     pub fn try_unsafe_write<F: FnOnce(*mut T)>(&self, writer: F) -> Result<(), ()> {
+        self.try_unsafe_write_or((), |dst, _| { writer(dst) }, |_| { () })
+    }
+
+
+    /// Write an object from the ring buffer, passing an uninitialized *mut pointer and an arbitrary content parameter to a given fuction to write to during transaction.
+    ///
+    /// The content of the cell will *NOT* be initialized and has to be overwritten using ptr::write_unaligned.
+    ///
+    /// The writer function is called once if there is room in the buffer
+    ///
+    /// # Examples
+    ///
+    ///```
+    /// // create an AtomicRingBuffer with capacity of 7 elements  (next power of 2 -1 from the given capacity)
+    /// let ring = ::atomicring::AtomicRingBuffer::with_capacity(5);
+    /// assert_eq!(7, ring.remaining_cap());
+    ///
+    /// // try_unsafe_write adds an element to the buffer, if there is room
+    /// let writer = |cell, content| unsafe { ::std::ptr::write_unaligned(cell, content) };
+    /// let error = |content| {content};
+    ///
+    /// assert_eq!(Ok(()), ring.try_unsafe_write_or(10, writer, error));
+    /// assert_eq!(Some(10), ring.try_pop());
+    /// assert_eq!(None, ring.try_pop());
+    ///
+    /// for i in 0..7 {
+    ///     assert_eq!(Ok(()), ring.try_unsafe_write_or(i, writer, error));
+    /// }
+    ///
+    /// assert_eq!(0, ring.remaining_cap());
+    ///
+    /// // try_unsafe_write returns an error to the caller if the buffer is full
+    /// assert_eq!(Err(7), ring.try_unsafe_write_or(7, writer, error));
+    ///
+    /// // existing values remain in the ring buffer
+    /// for i in 0..7 {
+    ///     assert_eq!(Some(i), ring.try_pop());
+    /// }
+    ///
+    ///```
+    #[inline(always)]
+    pub fn try_unsafe_write_or<CNT, OK, ERR, W: FnOnce(*mut T, CNT) -> OK, E: FnOnce(CNT) -> ERR>(&self, content: CNT, writer: W, err: E) -> Result<OK, ERR> {
         let cap_mask = self.cap_mask();
         let error_condition = |to_write_index: usize, _: u8| { to_write_index.wrapping_add(1) & cap_mask == self.read_counters.load(Ordering::SeqCst).index() };
 
         if let Ok((write_counters, to_write_index)) = self.write_counters.increment_in_progress(error_condition, cap_mask) {
 
             // write mem
-            unsafe {
-                let dst = self.cell(to_write_index);
-                writer(dst);
-            }
+            let ok = unsafe {
+                let cell = self.cell(to_write_index);
+                writer(cell, content)
+            };
 
             // Mark write as done
             self.write_counters.increment_done(write_counters, to_write_index, cap_mask);
-            Ok(())
+            Ok(ok)
         } else {
-            Err(())
+            Err(err(content))
         }
     }
 
 
     /// Pushes an object to the atomic ring buffer.
     /// If the buffer is full, another object will be popped to make room for the new object.
+    ///
+    /// # Examples
+    ///
+    ///```
+    /// // create an AtomicRingBuffer with capacity of 3 elements
+    /// let ring = ::atomicring::AtomicRingBuffer::with_capacity(3);
+    ///
+    /// assert_eq!(3, ring.remaining_cap());
+    ///
+    /// // push_overwrite adds an element to the buffer, overwriting an older element
+    ///
+    /// ring.push_overwrite(10);
+    /// assert_eq!(Some(10), ring.try_pop());
+    /// assert_eq!(None, ring.try_pop());
+    ///
+    /// for i in 0..3 {
+    ///     ring.push_overwrite(i);
+    /// }
+    /// // push_overwrite overwrites t first element
+    /// ring.push_overwrite(3);
+    ///
+    /// // first value (0) was removed
+    /// for i in 1..4 {
+    ///     assert_eq!(Some(i), ring.try_pop());
+    /// }
+    ///
+    ///```
     #[inline(always)]
     pub fn push_overwrite(&self, content: T) {
         let mut cont = content;
         loop {
-            let option = self.try_push(cont);
-            if option.is_ok() {
-                return;
+            match self.try_push(cont) {
+                Ok(_) => return,
+                Err(ret) => {
+                    self.remove_if_full();
+                    cont = ret;
+                }
             }
-            self.remove_if_full();
-            cont = option.err().unwrap();
         }
     }
 
-    /// Pop an object from the ring buffer, returns None if the buffer is empty
+    /// Tries to pop an object from the ring buffer.
+    /// If the buffer is empty this returns None, otherwise this returns Some(val)
+    ///
+    /// # Examples
+    ///
+    ///```
+    /// // create an AtomicRingBuffer with capacity of 3 elements
+    /// let ring = ::atomicring::AtomicRingBuffer::with_capacity(3);
+    ///
+    /// assert_eq!(Ok(()), ring.try_push(10));
+    /// assert_eq!(Some(10), ring.try_pop());
+    /// assert_eq!(None, ring.try_pop());
+    ///
+    ///```
     #[inline]
     pub fn try_pop(&self) -> Option<T> {
-        let cap_mask = self.cap_mask();
-
-
-        let error_condition = |to_read_index: usize, _: u8| { to_read_index == self.write_counters.load(Ordering::SeqCst).index() };
-
-
-        if let Ok((read_counters, to_read_index)) = self.read_counters.increment_in_progress(error_condition, cap_mask) {
-            let popped = unsafe {
-                // Read Memory
-                ptr::read_unaligned(self.cell(to_read_index))
-            };
-
-            self.read_counters.increment_done(read_counters, to_read_index, cap_mask);
-            Some(popped)
-        } else {
-            None
-        }
+        self.try_read_nodrop(|cell| unsafe { ptr::read_unaligned(cell) })
     }
 
     /// Read an object from the ring buffer, passing an &mut pointer to a given function to read during transaction.
     ///
     /// The given function is called with a mutable reference to the cell, and then the content in the cell is dropped
     ///
-    /// If you do not want the content to be dropped, you can use std::mem::replace to replace the content of the cell with some default value (which will then be dropped)
-    /// or just use try_pop()
+    /// If you do not want the content to be dropped use try_read_nodrop(..) or just use try_pop()
+    ///
+    /// # Examples
+    ///
+    ///```
+    /// // create an AtomicRingBuffer with capacity of 3 elements
+    /// let ring = ::atomicring::AtomicRingBuffer::with_capacity(3);
+    ///
+    /// assert_eq!(Ok(()), ring.try_push(10));
+    /// assert_eq!(Some(10), ring.try_read(|cell| unsafe { *cell }));
+    /// assert_eq!(None, ring.try_read(|cell| unsafe { *cell }));
+    ///
+    ///```
     #[inline]
     pub fn try_read<U, F: FnOnce(&mut T) -> U>(&self, reader: F) -> Option<U> {
-        let cap_mask = self.cap_mask();
+        self.try_read_nodrop(|cell| unsafe {
+            let result = reader(&mut (*cell));
+            ptr::drop_in_place(cell);
+            result
+        })
+    }
 
+    /// Read an object from the ring buffer, passing an &mut pointer to a given function to read during transaction.
+    ///
+    /// The given function is called with a mutable reference to the cell. The content in the cell is not dropped after reading, so the given function must take ownership of the content ideally using ptr::read_unaligned(cell)
+    ///
+    /// # Examples
+    ///
+    ///```
+    /// // create an AtomicRingBuffer with capacity of 3 elements
+    /// let ring = ::atomicring::AtomicRingBuffer::with_capacity(3);
+    ///
+    /// assert_eq!(Ok(()), ring.try_push(10));
+    /// assert_eq!(Some(10), ring.try_read_nodrop(|cell| unsafe { *cell }));
+    /// assert_eq!(None, ring.try_read_nodrop(|cell| unsafe { *cell }));
+    ///
+    ///```
+    #[inline]
+    pub fn try_read_nodrop<U, F: FnOnce(&mut T) -> U>(&self, reader: F) -> Option<U> {
+        let cap_mask = self.cap_mask();
 
         let error_condition = |to_read_index: usize, _: u8| { to_read_index == self.write_counters.load(Ordering::SeqCst).index() };
 
@@ -284,9 +401,7 @@ impl<T: Sized> AtomicRingBuffer<T> {
         if let Ok((read_counters, to_read_index)) = self.read_counters.increment_in_progress(error_condition, cap_mask) {
             let popped = unsafe {
                 let cell = self.cell(to_read_index);
-                let result = reader(&mut (*cell));
-                ptr::drop_in_place(cell);
-                result
+                reader(&mut (*cell))
             };
             self.read_counters.increment_done(read_counters, to_read_index, cap_mask);
             Some(popped)
@@ -297,6 +412,21 @@ impl<T: Sized> AtomicRingBuffer<T> {
 
 
     /// Returns the number of objects stored in the ring buffer that are not in process of being removed.
+    ///
+    /// # Examples
+    ///
+    ///```
+    /// // create an AtomicRingBuffer with capacity of 3 elements
+    /// let ring = ::atomicring::AtomicRingBuffer::with_capacity(3);
+    ///
+    /// assert_eq!(0, ring.len());
+    /// assert_eq!(Ok(()), ring.try_push(10));
+    /// assert_eq!(1, ring.len());
+    /// assert_eq!(Some(10), ring.try_pop());
+    /// assert_eq!(None, ring.try_pop());
+    /// assert_eq!(0, ring.len());
+    ///
+    ///```
     #[inline]
     pub fn len(&self) -> usize {
         let read_counters = self.read_counters.load(Ordering::SeqCst);
@@ -306,12 +436,42 @@ impl<T: Sized> AtomicRingBuffer<T> {
 
 
     /// Returns the true if ring buffer is empty. Equivalent to `self.len() == 0`
+    ///
+    /// # Examples
+    ///
+    ///```
+    /// // create an AtomicRingBuffer with capacity of 3 elements
+    /// let ring = ::atomicring::AtomicRingBuffer::with_capacity(3);
+    ///
+    /// assert_eq!(true, ring.is_empty());
+    /// assert_eq!(Ok(()), ring.try_push(10));
+    /// assert_eq!(false, ring.is_empty());
+    /// assert_eq!(Some(10), ring.try_pop());
+    /// assert_eq!(None, ring.try_pop());
+    /// assert_eq!(true, ring.is_empty());
+    ///
+    ///```
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     /// Returns the maximum capacity of the ring buffer
+    ///
+    /// # Examples
+    ///
+    ///```
+    /// // create an AtomicRingBuffer with capacity of 3 elements
+    /// let ring = ::atomicring::AtomicRingBuffer::with_capacity(3);
+    ///
+    /// assert_eq!(true, ring.is_empty());
+    /// assert_eq!(Ok(()), ring.try_push(10));
+    /// assert_eq!(false, ring.is_empty());
+    /// assert_eq!(Some(10), ring.try_pop());
+    /// assert_eq!(None, ring.try_pop());
+    /// assert_eq!(true, ring.is_empty());
+    ///
+    ///```
     #[inline(always)]
     pub fn cap(&self) -> usize {
         unsafe { (*self.mem).len() }
@@ -319,6 +479,20 @@ impl<T: Sized> AtomicRingBuffer<T> {
 
     /// Returns the remaining capacity of the ring buffer.
     /// This is equal to `self.cap() - self.len() - pending writes + pending reads`.
+    ///
+    /// # Examples
+    ///
+    ///```
+    /// // create an AtomicRingBuffer with capacity of 3 elements
+    /// let ring = ::atomicring::AtomicRingBuffer::with_capacity(3);
+    ///
+    /// assert_eq!(3, ring.remaining_cap());
+    /// assert_eq!(Ok(()), ring.try_push(10));
+    /// assert_eq!(2, ring.remaining_cap());
+    /// assert_eq!(Some(10), ring.try_pop());
+    /// assert_eq!(3, ring.remaining_cap());
+    ///
+    ///```
     #[inline]
     pub fn remaining_cap(&self) -> usize {
         let read_counters = self.read_counters.load(Ordering::SeqCst);
@@ -343,6 +517,19 @@ impl<T: Sized> AtomicRingBuffer<T> {
         unsafe { mem::size_of_val(&(*self.mem)) }
     }
 
+    /// Returns a *mut T pointer to an indexed cell
+    #[inline(always)]
+    unsafe fn cell(&self, index: usize) -> *mut T {
+        (&mut (*self.mem)[index])
+    }
+
+    /// Returns the capacity mask
+    #[inline(always)]
+    fn cap_mask(&self) -> usize {
+        self.cap() - 1
+    }
+
+
     /// pop one element, but only if ringbuffer is full, used by push_overwrite
     fn remove_if_full(&self) -> Option<T> {
         let cap_mask = self.cap_mask();
@@ -363,6 +550,15 @@ impl<T: Sized> AtomicRingBuffer<T> {
         } else {
             None
         }
+    }
+}
+
+impl<T> Drop for AtomicRingBuffer<T> {
+    fn drop(&mut self) {
+        // drop contents
+        self.clear();
+        // drop memory box without dropping contents
+        unsafe { Box::from_raw(self.mem).into_vec().set_len(0); }
     }
 }
 
@@ -440,10 +636,6 @@ impl CounterStore {
     #[inline(always)]
     pub fn increment_in_progress<F>(&self, error_condition: F, cap_mask: usize) -> Result<(Counters, usize), ()>
         where F: Fn(usize, u8) -> bool {
-        /*        let counters = Counters(self.counters.fetch_add(1, Ordering::Acquire).wrapping_add(1));
-                return Ok((counters,counters.index() & cap_mask));
-        */
-        let mut index;
 
         // Mark write as in progress
         let mut counters = self.load(Ordering::Acquire);
@@ -457,7 +649,7 @@ impl CounterStore {
             }
 
 
-            index = counters.index().wrapping_add(in_progress_count as usize) & cap_mask;
+            let index = counters.index().wrapping_add(in_progress_count as usize) & cap_mask;
 
             if error_condition(index, in_progress_count) {
                 return Err(());
@@ -465,9 +657,7 @@ impl CounterStore {
 
             let new_counters = Counters(counters.0.wrapping_add(1));
             match self.counters.compare_exchange_weak(counters.0, new_counters.0, Ordering::Acquire, Ordering::Relaxed) {
-                Ok(_) => {
-                    return Ok((new_counters, index));
-                }
+                Ok(_) => return Ok((new_counters, index)),
                 Err(updated) => counters = Counters(updated)
             };
         }
@@ -503,16 +693,6 @@ impl CounterStore {
                 Err(updated) => counters = Counters(updated)
             };
         }
-    }
-}
-
-
-impl<T> Drop for AtomicRingBuffer<T> {
-    fn drop(&mut self) {
-        // drop contents
-        self.clear();
-        // drop memory box without dropping contents
-        unsafe { Box::from_raw(self.mem).into_vec().set_len(0); }
     }
 }
 
@@ -749,6 +929,29 @@ mod tests {
         }
         actual.sort_by(|&a, b| a.partial_cmp(b).unwrap());
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    pub fn test_push_overwrite() {
+        // create an AtomicRingBuffer with capacity of 8 elements (next power of 2 from the given capacity)
+        let ring = super::AtomicRingBuffer::with_capacity(3);
+
+        // push_overwrite adds an element to the buffer, overwriting an older element
+
+        ring.push_overwrite(10);
+        assert_eq!(Some(10), ring.try_pop());
+        assert_eq!(None, ring.try_pop());
+
+        for i in 0..3 {
+            assert_eq!(Ok(()), ring.try_push(i));
+        }
+        assert_eq!(3, ring.len());
+
+        ring.push_overwrite(3);
+
+        assert_eq!(Some(1), ring.try_pop());
+        assert_eq!(Some(2), ring.try_pop());
+        assert_eq!(Some(3), ring.try_pop());
     }
 
     static DROP_COUNT: ::std::sync::atomic::AtomicUsize = ::std::sync::atomic::ATOMIC_USIZE_INIT;

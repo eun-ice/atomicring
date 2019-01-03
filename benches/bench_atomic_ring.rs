@@ -249,6 +249,18 @@ fn bench_mpmc_singlethread_small(b: &mut Bencher) {
         }
     });
 }
+#[bench]
+fn bench_mpmc_singlethread_optionsmall(b: &mut Bencher) {
+    let ring: Queue<Option<SmallType>> = Queue::with_capacity(10000);
+    b.iter(|| {
+        for i in 0..10000 {
+            let _ = ring.push(Some(SmallType::new(i)));
+        }
+        for i in 0..10000 {
+            assert_eq!(ring.pop().unwrap().unwrap().index, i);
+        }
+    });
+}
 
 #[bench]
 fn bench_mpmc_singlethread_medium(b: &mut Bencher) {
