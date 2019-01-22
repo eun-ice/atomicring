@@ -61,7 +61,7 @@ use std::sync::atomic::{AtomicUsize, Ordering, spin_loop_hint};
 ///
 ///```toml
 ///[dependencies]
-///atomicring = "1.1.0"
+///atomicring = "1.1.1"
 ///```
 ///
 ///
@@ -226,7 +226,7 @@ impl<T: Sized> AtomicRingBuffer<T> {
     ///```
     #[inline(always)]
     pub fn try_unsafe_write<F: FnOnce(*mut T)>(&self, writer: F) -> Result<(), ()> {
-        self.try_unsafe_write_or((), |dst, _| { writer(dst) }, |_| { () })
+        self.try_unsafe_write_or((), |dst, _| { writer(dst) }, |_| { })
     }
 
 
@@ -584,17 +584,17 @@ pub struct Counters(usize);
 
 impl Counters {
     #[inline(always)]
-    fn index(self) -> usize {
+    const fn index(self) -> usize {
         self.0 >> 16
     }
 
     #[inline(always)]
-    fn in_process_count(self) -> u8 {
+    const fn in_process_count(self) -> u8 {
         self.0 as u8
     }
 
     #[inline(always)]
-    fn done_count(self) -> u8 {
+    const fn done_count(self) -> u8 {
         (self.0 >> 8) as u8
     }
 }
@@ -626,7 +626,7 @@ struct CounterStore {
 }
 
 impl CounterStore {
-    pub fn new() -> CounterStore {
+    pub const fn new() -> CounterStore {
         CounterStore { counters: AtomicUsize::new(0) }
     }
     #[inline(always)]
@@ -954,7 +954,7 @@ mod tests {
         assert_eq!(Some(3), ring.try_pop());
     }
 
-    static DROP_COUNT: ::std::sync::atomic::AtomicUsize = ::std::sync::atomic::ATOMIC_USIZE_INIT;
+    static DROP_COUNT: ::std::sync::atomic::AtomicUsize = ::std::sync::atomic::AtomicUsize::new(0);
 
     #[allow(dead_code)]
     #[derive(Debug, Default)]
