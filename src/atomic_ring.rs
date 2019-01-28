@@ -61,7 +61,7 @@ use std::sync::atomic::{AtomicUsize, Ordering, spin_loop_hint};
 ///
 ///```toml
 ///[dependencies]
-///atomicring = "1.1.1"
+///atomicring = "1.1.2"
 ///```
 ///
 ///
@@ -109,7 +109,7 @@ impl<T: Default> AtomicRingBuffer<T> {
     #[inline(always)]
     pub fn try_write<F: FnOnce(&mut T)>(&self, writer: F) -> Result<(), ()> {
         self.try_unsafe_write(|cell| unsafe {
-            ptr::write_unaligned(cell, Default::default());
+            ptr::write(cell, Default::default());
             writer(&mut (*cell));
         })
     }
@@ -191,12 +191,12 @@ impl<T: Sized> AtomicRingBuffer<T> {
     ///```
     #[inline(always)]
     pub fn try_push(&self, content: T) -> Result<(), T> {
-        self.try_unsafe_write_or(content, |cell, content| { unsafe { ptr::write_unaligned(cell, content); } }, |content| { content })
+        self.try_unsafe_write_or(content, |cell, content| { unsafe { ptr::write(cell, content); } }, |content| { content })
     }
 
     /// Write an object from the ring buffer, passing an uninitialized *mut pointer to a given fuction to write to during transaction.
     ///
-    /// The content of the cell will *NOT* be initialized and has to be overwritten using ptr::write_unaligned.
+    /// The content of the cell will *NOT* be initialized and has to be overwritten using ptr::write.
     ///
     /// The writer function is called once if there is room in the buffer
     ///
@@ -208,16 +208,16 @@ impl<T: Sized> AtomicRingBuffer<T> {
     /// assert_eq!(7, ring.remaining_cap());
     ///
     /// // try_unsafe_write adds an element to the buffer, if there is room
-    /// assert_eq!(Ok(()), ring.try_unsafe_write(|cell| unsafe { ::std::ptr::write_unaligned(cell, 10) }));
+    /// assert_eq!(Ok(()), ring.try_unsafe_write(|cell| unsafe { ::std::ptr::write(cell, 10) }));
     /// assert_eq!(Some(10), ring.try_pop());
     /// assert_eq!(None, ring.try_pop());
     ///
     /// for i in 0..7 {
-    ///     assert_eq!(Ok(()), ring.try_unsafe_write(|cell| unsafe { ::std::ptr::write_unaligned(cell, i) }));
+    ///     assert_eq!(Ok(()), ring.try_unsafe_write(|cell| unsafe { ::std::ptr::write(cell, i) }));
     /// }
     ///
     /// // try_unsafe_write returns an error to the caller if the buffer is full
-    /// assert_eq!(Err(()), ring.try_unsafe_write(|cell| unsafe { ::std::ptr::write_unaligned(cell, 7) }));
+    /// assert_eq!(Err(()), ring.try_unsafe_write(|cell| unsafe { ::std::ptr::write(cell, 7) }));
     ///
     /// // existing values remain in the ring buffer
     /// for i in 0..7 {
@@ -232,7 +232,7 @@ impl<T: Sized> AtomicRingBuffer<T> {
 
     /// Write an object from the ring buffer, passing an uninitialized *mut pointer and an arbitrary content parameter to a given fuction to write to during transaction.
     ///
-    /// The content of the cell will *NOT* be initialized and has to be overwritten using ptr::write_unaligned.
+    /// The content of the cell will *NOT* be initialized and has to be overwritten using ptr::write.
     ///
     /// The writer function is called once if there is room in the buffer
     ///
@@ -244,7 +244,7 @@ impl<T: Sized> AtomicRingBuffer<T> {
     /// assert_eq!(7, ring.remaining_cap());
     ///
     /// // try_unsafe_write adds an element to the buffer, if there is room
-    /// let writer = |cell, content| unsafe { ::std::ptr::write_unaligned(cell, content) };
+    /// let writer = |cell, content| unsafe { ::std::ptr::write(cell, content) };
     /// let error = |content| {content};
     ///
     /// assert_eq!(Ok(()), ring.try_unsafe_write_or(10, writer, error));
@@ -347,7 +347,7 @@ impl<T: Sized> AtomicRingBuffer<T> {
     ///```
     #[inline]
     pub fn try_pop(&self) -> Option<T> {
-        self.try_read_nodrop(|cell| unsafe { ptr::read_unaligned(cell) })
+        self.try_read_nodrop(|cell| unsafe { ptr::read(cell) })
     }
 
     /// Read an object from the ring buffer, passing an &mut pointer to a given function to read during transaction.
@@ -378,7 +378,7 @@ impl<T: Sized> AtomicRingBuffer<T> {
 
     /// Read an object from the ring buffer, passing an &mut pointer to a given function to read during transaction.
     ///
-    /// The given function is called with a mutable reference to the cell. The content in the cell is not dropped after reading, so the given function must take ownership of the content ideally using ptr::read_unaligned(cell)
+    /// The given function is called with a mutable reference to the cell. The content in the cell is not dropped after reading, so the given function must take ownership of the content ideally using ptr::read(cell)
     ///
     /// # Examples
     ///
@@ -541,7 +541,7 @@ impl<T: Sized> AtomicRingBuffer<T> {
         if let Ok((read_counters, to_read_index)) = self.read_counters.increment_in_progress(error_condition, cap_mask) {
             let popped = unsafe {
                 // Read Memory
-                ptr::read_unaligned(self.cell(to_read_index))
+                ptr::read(self.cell(to_read_index))
             };
 
             self.read_counters.increment_done(read_counters, to_read_index, cap_mask);
@@ -1004,8 +1004,8 @@ mod tests {
         DROP_COUNT.store(0, ::std::sync::atomic::Ordering::Relaxed);
         {
             let buf: super::AtomicRingBuffer<TestType> = super::AtomicRingBuffer::with_capacity(1024);
-            buf.try_unsafe_write(|w| unsafe { ::std::ptr::write_unaligned(w, TestType { some: 0 }) }).expect("push");
-            buf.try_unsafe_write(|w| unsafe { ::std::ptr::write_unaligned(w, TestType { some: 0 }) }).expect("push");
+            buf.try_unsafe_write(|w| unsafe { ::std::ptr::write(w, TestType { some: 0 }) }).expect("push");
+            buf.try_unsafe_write(|w| unsafe { ::std::ptr::write(w, TestType { some: 0 }) }).expect("push");
 
             assert_eq!(0, DROP_COUNT.load(::std::sync::atomic::Ordering::Relaxed));
             buf.try_read(|_| {});

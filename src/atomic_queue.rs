@@ -337,7 +337,7 @@ mod tests {
         assert_eq!(actual, expected);
     }
 
-    static DROP_COUNT: ::std::sync::atomic::AtomicUsize = ::std::sync::atomic::ATOMIC_USIZE_INIT;
+    static DROP_COUNT: ::std::sync::atomic::AtomicUsize = ::std::sync::atomic::AtomicUsize::new(0);
 
     #[allow(dead_code)]
     #[derive(Debug)]
