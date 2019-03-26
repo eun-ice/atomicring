@@ -1,3 +1,4 @@
+use std::fmt::{self, Debug};
 use std::time::Duration;
 use std::time::Instant;
 
@@ -35,6 +36,11 @@ unsafe impl<T: Send> Send for AtomicRingQueue<T> {}
 /// If T is Send, AtomicRingQueue is Send + Sync
 unsafe impl<T: Send> Sync for AtomicRingQueue<T> {}
 
+impl<T> Debug for AtomicRingQueue<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "AtomicRingQueue {:?}/{:?}", self.ring.len(), self.ring.capacity())
+    }
+}
 
 impl<T> AtomicRingQueue<T> {
     /// Constructs a new empty AtomicRingQueue<T> with the specified capacity
@@ -170,7 +176,7 @@ impl<T> AtomicRingQueue<T> {
     /// Attention: In fact you can store one element less than the cap given here
     #[inline(always)]
     pub fn cap(&self) -> usize {
-        self.ring.cap()
+        self.ring.capacity()
     }
 
     /// Returns the remaining capacity of the ring buffer.

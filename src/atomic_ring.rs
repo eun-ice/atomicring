@@ -61,7 +61,7 @@ use std::sync::atomic::{AtomicUsize, Ordering, spin_loop_hint};
 ///
 ///```toml
 ///[dependencies]
-///atomicring = "1.1.2"
+///atomicring = "1.2.0"
 ///```
 ///
 ///
@@ -431,7 +431,7 @@ impl<T: Sized> AtomicRingBuffer<T> {
     pub fn len(&self) -> usize {
         let read_counters = self.read_counters.load(Ordering::SeqCst);
         let write_counters = self.write_counters.load(Ordering::SeqCst);
-        counter_len(read_counters, write_counters, self.cap())
+        counter_len(read_counters, write_counters, self.capacity())
     }
 
 
@@ -473,7 +473,7 @@ impl<T: Sized> AtomicRingBuffer<T> {
     ///
     ///```
     #[inline(always)]
-    pub fn cap(&self) -> usize {
+    pub fn capacity(&self) -> usize {
         unsafe { (*self.mem).len() }
     }
 
@@ -497,7 +497,7 @@ impl<T: Sized> AtomicRingBuffer<T> {
     pub fn remaining_cap(&self) -> usize {
         let read_counters = self.read_counters.load(Ordering::SeqCst);
         let write_counters = self.write_counters.load(Ordering::SeqCst);
-        let cap = self.cap();
+        let cap = self.capacity();
         let read_index = read_counters.index();
         let write_index = write_counters.index();
         let len = if read_index <= write_index { write_index - read_index } else { write_index + cap - read_index };
@@ -526,7 +526,7 @@ impl<T: Sized> AtomicRingBuffer<T> {
     /// Returns the capacity mask
     #[inline(always)]
     fn cap_mask(&self) -> usize {
-        self.cap() - 1
+        self.capacity() - 1
     }
 
 
@@ -566,14 +566,14 @@ impl<T> Drop for AtomicRingBuffer<T> {
 impl<T> fmt::Debug for AtomicRingBuffer<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if f.alternate() {
-            let cap = self.cap();
+            let cap = self.capacity();
             let read_counters = self.read_counters.load(Ordering::Relaxed);
             let write_counters = self.write_counters.load(Ordering::Relaxed);
             write!(f, "AtomicRingBuffer cap: {} len: {} read_index: {}, read_in_process_count: {}, read_done_count: {}, write_index: {}, write_in_process_count: {}, write_done_count: {}", cap, self.len(),
                    read_counters.index(), read_counters.in_process_count(), read_counters.done_count(),
                    write_counters.index(), write_counters.in_process_count(), write_counters.done_count())
         } else {
-            write!(f, "AtomicRingBuffer cap: {} len: {}", self.cap(), self.len())
+            write!(f, "AtomicRingBuffer cap: {} len: {}", self.capacity(), self.len())
         }
     }
 }
@@ -771,7 +771,7 @@ mod tests {
     #[test]
     pub fn test_pushpop() {
         let ring = super::AtomicRingBuffer::with_capacity(900);
-        assert_eq!(1024, ring.cap());
+        assert_eq!(1024, ring.capacity());
         assert_eq!(None, ring.try_pop());
         ring.push_overwrite(1);
         assert_eq!(Some(1), ring.try_pop());
@@ -789,11 +789,11 @@ mod tests {
         for i in 0..199999 {
             ring.push_overwrite(i);
         }
-        assert_eq!(ring.cap(), ring.len() + 1);
-        assert_eq!(199999 - (ring.cap() - 1), ring.try_pop().unwrap());
+        assert_eq!(ring.capacity(), ring.len() + 1);
+        assert_eq!(199999 - (ring.capacity() - 1), ring.try_pop().unwrap());
         assert_eq!(Ok(()), ring.try_push(199999));
 
-        for i in 200000 - (ring.cap() - 1)..200000 {
+        for i in 200000 - (ring.capacity() - 1)..200000 {
             assert_eq!(i, ring.try_pop().unwrap());
         }
 
@@ -801,7 +801,7 @@ mod tests {
         for i in 0..1023 {
             ring.try_push(i).expect("push")
         }
-        assert_eq!(1024, ring.cap());
+        assert_eq!(1024, ring.capacity());
         assert_eq!(1023, ring.len());
         for i in 0..1023 {
             assert_eq!(ring.try_pop(), Some(i));
@@ -827,9 +827,9 @@ mod tests {
         for i in 0..200000 {
             ring.push_overwrite(i);
         }
-        assert_eq!(ring.cap(), ring.len() + 1);
+        assert_eq!(ring.capacity(), ring.len() + 1);
 
-        for i in 200000 - (ring.cap() - 1)..200000 {
+        for i in 200000 - (ring.capacity() - 1)..200000 {
             assert_eq!(i, ring.try_pop().unwrap());
         }
     }
@@ -852,9 +852,9 @@ mod tests {
         for i in 0..200000 {
             ring.push_overwrite(i);
         }
-        assert_eq!(ring.cap(), ring.len() + 1);
+        assert_eq!(ring.capacity(), ring.len() + 1);
 
-        for i in 200000 - (ring.cap() - 1)..200000 {
+        for i in 200000 - (ring.capacity() - 1)..200000 {
             assert_eq!(i, ring.try_pop().unwrap());
         }
     }
@@ -882,9 +882,9 @@ mod tests {
         for _i in 0..200000 {
             ring.push_overwrite(ZeroType {});
         }
-        assert_eq!(ring.cap(), ring.len() + 1);
+        assert_eq!(ring.capacity(), ring.len() + 1);
 
-        for _i in 200000 - (ring.cap() - 1)..200000 {
+        for _i in 200000 - (ring.capacity() - 1)..200000 {
             assert_eq!(ZeroType {}, ring.try_pop().unwrap());
         }
     }
