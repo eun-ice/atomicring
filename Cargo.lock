@@ -2,7 +2,7 @@
 # It is not intended for manual editing.
 [[package]]
 name = "atomicring"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "mpmc 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "parking_lot 0.7.1 (registry+https://github.com/rust-lang/crates.io-index)",

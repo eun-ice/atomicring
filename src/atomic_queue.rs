@@ -173,9 +173,9 @@ impl<T> AtomicRingQueue<T> {
     }
 
     /// Returns the maximum capacity of the ring buffer.
-    /// Attention: In fact you can store one element less than the cap given here
+    /// Attention: In fact you can store one element less than the capacity given here
     #[inline(always)]
-    pub fn cap(&self) -> usize {
+    pub fn capacity(&self) -> usize {
         self.ring.capacity()
     }
 
@@ -199,7 +199,7 @@ mod tests {
     #[test]
     pub fn test_pushpop() {
         let ring = super::AtomicRingQueue::with_capacity(900);
-        assert_eq!(1024, ring.cap());
+        assert_eq!(1024, ring.capacity());
         assert_eq!(None, ring.try_pop());
         ring.push_overwrite(1);
         assert_eq!(1, ring.pop());
@@ -215,11 +215,11 @@ mod tests {
         for i in 0..199999 {
             ring.push_overwrite(i);
         }
-        assert_eq!(ring.cap(), ring.len() + 1);
-        assert_eq!(199999 - (ring.cap() - 1), ring.pop());
+        assert_eq!(ring.capacity(), ring.len() + 1);
+        assert_eq!(199999 - (ring.capacity() - 1), ring.pop());
         assert_eq!(Ok(()), ring.try_push(199999));
 
-        for i in 200000 - (ring.cap() - 1)..200000 {
+        for i in 200000 - (ring.capacity() - 1)..200000 {
             assert_eq!(i, ring.pop());
         }
     }
@@ -242,9 +242,9 @@ mod tests {
         for i in 0..200000 {
             ring.push_overwrite(i);
         }
-        assert_eq!(ring.cap(), ring.len() + 1);
+        assert_eq!(ring.capacity(), ring.len() + 1);
 
-        for i in 200000 - (ring.cap() - 1)..200000 {
+        for i in 200000 - (ring.capacity() - 1)..200000 {
             assert_eq!(i, ring.pop());
         }
     }
@@ -267,9 +267,9 @@ mod tests {
         for i in 0..200000 {
             ring.push_overwrite(i);
         }
-        assert_eq!(ring.cap(), ring.len() + 1);
+        assert_eq!(ring.capacity(), ring.len() + 1);
 
-        for i in 200000 - (ring.cap() - 1)..200000 {
+        for i in 200000 - (ring.capacity() - 1)..200000 {
             assert_eq!(i, ring.pop());
         }
     }
@@ -296,9 +296,9 @@ mod tests {
         for _i in 0..200000 {
             ring.push_overwrite(ZeroType {});
         }
-        assert_eq!(ring.cap(), ring.len() + 1);
+        assert_eq!(ring.capacity(), ring.len() + 1);
 
-        for _i in 200000 - (ring.cap() - 1)..200000 {
+        for _i in 200000 - (ring.capacity() - 1)..200000 {
             assert_eq!(ZeroType {}, ring.pop());
         }
     }
