@@ -61,7 +61,7 @@ use std::sync::atomic::{AtomicUsize, Ordering, spin_loop_hint};
 ///
 ///```toml
 ///[dependencies]
-///atomicring = "1.2.1"
+///atomicring = "1.2.2"
 ///```
 ///
 ///
@@ -109,7 +109,9 @@ impl<T: Default> AtomicRingBuffer<T> {
     #[inline(always)]
     pub fn try_write<F: FnOnce(&mut T)>(&self, writer: F) -> Result<(), ()> {
         self.try_unsafe_write(|cell| unsafe {
-            ptr::write(cell, Default::default());
+            if mem::size_of::<T>() != 0 {
+                ptr::write(cell, Default::default());
+            }
             writer(&mut (*cell));
         })
     }
@@ -191,7 +193,11 @@ impl<T: Sized> AtomicRingBuffer<T> {
     ///```
     #[inline(always)]
     pub fn try_push(&self, content: T) -> Result<(), T> {
-        self.try_unsafe_write_or(content, |cell, content| { unsafe { ptr::write(cell, content); } }, |content| { content })
+        self.try_unsafe_write_or(content, |cell, content| {
+            if mem::size_of::<T>() != 0 {
+                unsafe { ptr::write(cell, content); }
+            }
+        }, |content| { content })
     }
 
     /// Write an object from the ring buffer, passing an uninitialized *mut pointer to a given fuction to write to during transaction.
@@ -199,6 +205,8 @@ impl<T: Sized> AtomicRingBuffer<T> {
     /// The content of the cell will *NOT* be initialized and has to be overwritten using ptr::write.
     ///
     /// The writer function is called once if there is room in the buffer
+    ///
+    /// Warning: Use ::std::ptr::write only if you know the type is not zero length.
     ///
     /// # Examples
     ///
@@ -208,16 +216,16 @@ impl<T: Sized> AtomicRingBuffer<T> {
     /// assert_eq!(7, ring.remaining_cap());
     ///
     /// // try_unsafe_write adds an element to the buffer, if there is room
-    /// assert_eq!(Ok(()), ring.try_unsafe_write(|cell| unsafe { ::std::ptr::write(cell, 10) }));
+    /// assert_eq!(Ok(()), ring.try_unsafe_write(|cell|  unsafe { ::std::ptr::write(cell, 10) } ));
     /// assert_eq!(Some(10), ring.try_pop());
     /// assert_eq!(None, ring.try_pop());
     ///
     /// for i in 0..7 {
-    ///     assert_eq!(Ok(()), ring.try_unsafe_write(|cell| unsafe { ::std::ptr::write(cell, i) }));
+    ///     assert_eq!(Ok(()), ring.try_unsafe_write(|cell| unsafe { ::std::ptr::write(cell, i) } ));
     /// }
     ///
     /// // try_unsafe_write returns an error to the caller if the buffer is full
-    /// assert_eq!(Err(()), ring.try_unsafe_write(|cell| unsafe { ::std::ptr::write(cell, 7) }));
+    /// assert_eq!(Err(()), ring.try_unsafe_write(|cell| unsafe { ::std::ptr::write(cell, 7) } ));
     ///
     /// // existing values remain in the ring buffer
     /// for i in 0..7 {
@@ -226,7 +234,7 @@ impl<T: Sized> AtomicRingBuffer<T> {
     ///```
     #[inline(always)]
     pub fn try_unsafe_write<F: FnOnce(*mut T)>(&self, writer: F) -> Result<(), ()> {
-        self.try_unsafe_write_or((), |dst, _| { writer(dst) }, |_| { })
+        self.try_unsafe_write_or((), |dst, _| { writer(dst) }, |_| {})
     }
 
 
@@ -347,7 +355,12 @@ impl<T: Sized> AtomicRingBuffer<T> {
     ///```
     #[inline]
     pub fn try_pop(&self) -> Option<T> {
-        self.try_read_nodrop(|cell| unsafe { ptr::read(cell) })
+        self.try_read_nodrop(|cell|
+            if ::std::mem::size_of::<T>() != 0 {
+                unsafe { ptr::read(cell) }
+            } else {
+                unsafe { ::std::mem::zeroed() }
+            })
     }
 
     /// Read an object from the ring buffer, passing an &mut pointer to a given function to read during transaction.
@@ -379,6 +392,8 @@ impl<T: Sized> AtomicRingBuffer<T> {
     /// Read an object from the ring buffer, passing an &mut pointer to a given function to read during transaction.
     ///
     /// The given function is called with a mutable reference to the cell. The content in the cell is not dropped after reading, so the given function must take ownership of the content ideally using ptr::read(cell)
+    ///
+    /// Warning: Do not use ptr::read for zero length types
     ///
     /// # Examples
     ///
@@ -541,7 +556,11 @@ impl<T: Sized> AtomicRingBuffer<T> {
         if let Ok((read_counters, to_read_index)) = self.read_counters.increment_in_progress(error_condition, cap_mask) {
             let popped = unsafe {
                 // Read Memory
-                ptr::read(self.cell(to_read_index))
+                if ::std::mem::size_of::<T>() != 0 {
+                    ptr::read(self.cell(to_read_index))
+                } else {
+                    ::std::mem::zeroed()
+                }
             };
 
             self.read_counters.increment_done(read_counters, to_read_index, cap_mask);
@@ -858,7 +877,6 @@ mod tests {
             assert_eq!(i, ring.try_pop().unwrap());
         }
     }
-
 
     #[test]
     pub fn test_pushpop_large2_zerotype() {
