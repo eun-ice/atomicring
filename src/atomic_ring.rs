@@ -535,7 +535,7 @@ impl<T: Sized> AtomicRingBuffer<T> {
     /// Returns a *mut T pointer to an indexed cell
     #[inline(always)]
     unsafe fn cell(&self, index: usize) -> *mut T {
-        (&mut (*self.mem)[index])
+        &mut (*self.mem)[index]
     }
 
     /// Returns the capacity mask
