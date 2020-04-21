@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicUsize, Ordering, spin_loop_hint};
 ///- maximum capacity of (usize >> 16) entries
 ///- capacity is rounded up to the next power of 2
 ///
-///This queue should perform similar to [mpmc](https://github.com/brayniac/mpmc) but with a lower memory overhead. 
+///This queue should perform similar to [mpmc](https://github.com/brayniac/mpmc) but with a lower memory overhead.
 ///If memory overhead is not your main concern you should run benchmarks to decide which one to use.
 ///
 ///## Implementation details
@@ -61,7 +61,7 @@ use std::sync::atomic::{AtomicUsize, Ordering, spin_loop_hint};
 ///
 ///```toml
 ///[dependencies]
-///atomicring = "1.2.4"
+///atomicring = "1.2.5"
 ///```
 ///
 ///
@@ -74,7 +74,7 @@ use std::sync::atomic::{AtomicUsize, Ordering, spin_loop_hint};
 ///
 ///// try_pop removes an element of the buffer and returns None if the buffer is empty
 ///assert_eq!(None, ring.try_pop());
-///// push_overwrite adds an element to the buffer, overwriting the oldest element if the buffer is full: 
+///// push_overwrite adds an element to the buffer, overwriting the oldest element if the buffer is full:
 ///ring.push_overwrite(1);
 ///assert_eq!(Some(1), ring.try_pop());
 ///assert_eq!(None, ring.try_pop());
@@ -639,9 +639,11 @@ fn counter_len(read_counters: Counters, write_counters: Counters, cap: usize) ->
 }
 
 
+
+#[cfg_attr(target_arch = "x86_64", repr(align(128)))]
+#[cfg_attr(not(target_arch = "x86_64"), repr(align(64)))]
 struct CounterStore {
     counters: AtomicUsize,
-
 }
 
 impl CounterStore {

@@ -5,6 +5,7 @@ extern crate test;
 
 use atomicring::AtomicRingBuffer;
 use mpmc::Queue;
+use crossbeam_queue::ArrayQueue;
 use test::Bencher;
 
 
@@ -279,6 +280,63 @@ fn bench_mpmc_singlethread_medium(b: &mut Bencher) {
 #[bench]
 fn bench_mpmc_singlethread_large(b: &mut Bencher) {
     let ring: Queue<LargeType> = Queue::with_capacity(10000);
+    b.iter(|| {
+        for i in 0..10000 {
+            let _ = ring.push(LargeType::new(i));
+        }
+        for i in 0..10000 {
+            assert_eq!(ring.pop().unwrap().index, i);
+        }
+    });
+}
+
+
+
+
+
+
+#[bench]
+fn bench_crossbeam_singlethread_small(b: &mut Bencher) {
+    let ring: ArrayQueue<SmallType> = ArrayQueue::new(10000);
+    b.iter(|| {
+        for i in 0..10000 {
+            let _ = ring.push(SmallType::new(i));
+        }
+        for i in 0..10000 {
+            assert_eq!(ring.pop().unwrap().index, i);
+        }
+    });
+}
+#[bench]
+fn bench_crossbeam_singlethread_optionsmall(b: &mut Bencher) {
+    let ring: ArrayQueue<Option<SmallType>> = ArrayQueue::new(10000);
+    b.iter(|| {
+        for i in 0..10000 {
+            let _ = ring.push(Some(SmallType::new(i)));
+        }
+        for i in 0..10000 {
+            assert_eq!(ring.pop().unwrap().unwrap().index, i);
+        }
+    });
+}
+
+#[bench]
+fn bench_crossbeam_singlethread_medium(b: &mut Bencher) {
+    let ring: ArrayQueue<MediumType> = ArrayQueue::new(10000);
+    b.iter(|| {
+        for i in 0..10000 {
+            let _ = ring.push(MediumType::new(i));
+        }
+        for i in 0..10000 {
+            assert_eq!(ring.pop().unwrap().index, i);
+        }
+    });
+}
+
+
+#[bench]
+fn bench_crossbeam_singlethread_large(b: &mut Bencher) {
+    let ring: ArrayQueue<LargeType> = ArrayQueue::new(10000);
     b.iter(|| {
         for i in 0..10000 {
             let _ = ring.push(LargeType::new(i));

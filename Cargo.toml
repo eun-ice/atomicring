@@ -1,6 +1,6 @@
 [package]
 name = "atomicring"
-version = "1.2.4"
+version = "1.2.5"
 authors = ["Crown Software GmbH"]
 description = "AtomicRingBuffer is a constant-size almost lock-free concurrent ring buffer"
 license = "MIT OR Apache-2.0"
@@ -17,4 +17,6 @@ parking_lot = "0.7"
 
 [dev-dependencies]
 mpmc = "0.1.5"
+crossbeam-queue = "0.2.1"
+
 
