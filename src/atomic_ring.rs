@@ -662,7 +662,7 @@ impl CounterStore {
         let mut counters = self.load(Ordering::Acquire);
         loop {
             let in_progress_count = counters.in_process_count();
-            // spin wait on 255 simultanous in progress writes
+            // spin wait on MAXIMUM_IN_PROGRESS simultanous in progress writes/reads
             if in_progress_count == MAXIMUM_IN_PROGRESS {
                 spin_loop_hint();
                 counters = self.load(Ordering::Acquire);
@@ -672,6 +672,7 @@ impl CounterStore {
 
             let index = counters.index().wrapping_add(in_progress_count as usize) & cap_mask;
 
+            // recheck error condition, e.g. full/empty
             if error_condition(index, in_progress_count) {
                 return Err(());
             }
