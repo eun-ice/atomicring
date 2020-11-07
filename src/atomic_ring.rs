@@ -406,7 +406,7 @@ impl<T: Sized> AtomicRingBuffer<T> {
     /// assert_eq!(None, ring.try_read_nodrop(|cell| unsafe { *cell }));
     ///
     ///```
-    #[inline]
+    #[inline(always)]
     pub fn try_read_nodrop<U, F: FnOnce(&mut T) -> U>(&self, reader: F) -> Option<U> {
         let cap_mask = self.cap_mask();
 
@@ -535,7 +535,8 @@ impl<T: Sized> AtomicRingBuffer<T> {
     /// Returns a *mut T pointer to an indexed cell
     #[inline(always)]
     unsafe fn cell(&self, index: usize) -> *mut T {
-        &mut (*self.mem)[index]
+        (*self.mem).get_unchecked_mut(index)
+        //&mut (*self.mem)[index]
     }
 
     /// Returns the capacity mask
@@ -639,7 +640,6 @@ fn counter_len(read_counters: Counters, write_counters: Counters, cap: usize) ->
 }
 
 
-
 #[cfg_attr(target_arch = "x86_64", repr(align(128)))]
 #[cfg_attr(not(target_arch = "x86_64"), repr(align(64)))]
 struct CounterStore {
@@ -662,14 +662,17 @@ impl CounterStore {
         let mut counters = self.load(Ordering::Acquire);
         loop {
             let in_progress_count = counters.in_process_count();
+            if error_condition(counters.index(), in_progress_count) {
+                return Err(());
+            }
+
+
             // spin wait on MAXIMUM_IN_PROGRESS simultanous in progress writes/reads
             if in_progress_count == MAXIMUM_IN_PROGRESS {
                 spin_loop_hint();
                 counters = self.load(Ordering::Acquire);
                 continue;
             }
-
-
             let index = counters.index().wrapping_add(in_progress_count as usize) & cap_mask;
 
             // recheck error condition, e.g. full/empty
@@ -686,9 +689,9 @@ impl CounterStore {
     }
     #[inline(always)]
     pub fn increment_done(&self, mut counters: Counters, index: usize, cap_mask: usize) {
-        // ultra fast path: if we are first pending operation in line and nothing is done yet,
+        // ultra fast path: if we are first pending operation in line and nothing is done yet, and we do not need to roll over the index
         // we can just increment index, decrement in_progress_count, preserve done_count without checking
-        // if counters.index()==index && counters.done_count()==0
+        // if counters.index() == index && counters.done_count() == 0 && index < cap_mask
         if (counters.0 & 0x00FF_FFFF_FFFF_FF00 == (index << 16)) && (index < cap_mask) {
             // even if other operations are in progress
             self.counters.fetch_add((1 << 16) - 1, Ordering::Release);
