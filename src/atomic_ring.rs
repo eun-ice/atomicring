@@ -61,7 +61,7 @@ use std::sync::atomic::{AtomicUsize, Ordering, spin_loop_hint};
 ///
 ///```toml
 ///[dependencies]
-///atomicring = "1.2.6"
+///atomicring = "1.2.7"
 ///```
 ///
 ///
@@ -297,7 +297,9 @@ impl<T: Sized> AtomicRingBuffer<T> {
 
 
     /// Pushes an object to the atomic ring buffer.
-    /// If the buffer is full, another object will be popped to make room for the new object.
+    /// If the buffer is full, another object will be popped and dropped to make room for the new object.
+    ///
+    /// Returns true if another element was overwritten
     ///
     /// # Examples
     ///
@@ -317,7 +319,7 @@ impl<T: Sized> AtomicRingBuffer<T> {
     ///     ring.push_overwrite(i);
     /// }
     /// // push_overwrite overwrites t first element
-    /// ring.push_overwrite(3);
+    /// assert_eq!(true, ring.push_overwrite(3));
     ///
     /// // first value (0) was removed
     /// for i in 1..4 {
@@ -326,13 +328,14 @@ impl<T: Sized> AtomicRingBuffer<T> {
     ///
     ///```
     #[inline(always)]
-    pub fn push_overwrite(&self, content: T) {
+    pub fn push_overwrite(&self, content: T) -> bool {
         let mut cont = content;
+        let mut dropped = false;
         loop {
             match self.try_push(cont) {
-                Ok(_) => return,
+                Ok(_) => return dropped,
                 Err(ret) => {
-                    self.remove_if_full();
+                    dropped |= self.remove_if_full().is_some();
                     cont = ret;
                 }
             }

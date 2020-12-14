@@ -2,7 +2,7 @@
 # It is not intended for manual editing.
 [[package]]
 name = "atomicring"
-version = "1.2.6"
+version = "1.2.7"
 dependencies = [
  "crossbeam-queue",
  "mpmc",
