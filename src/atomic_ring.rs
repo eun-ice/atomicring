@@ -1,8 +1,9 @@
 use std::fmt;
+use std::hint::spin_loop;
 use std::marker::PhantomData;
 use std::mem;
 use std::ptr;
-use std::sync::atomic::{AtomicUsize, Ordering, spin_loop_hint};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 ///A constant-size almost lock-free concurrent ring buffer
 ///
@@ -61,7 +62,7 @@ use std::sync::atomic::{AtomicUsize, Ordering, spin_loop_hint};
 ///
 ///```toml
 ///[dependencies]
-///atomicring = "1.2.7"
+///atomicring = "1.2.8"
 ///```
 ///
 ///
@@ -672,7 +673,7 @@ impl CounterStore {
 
             // spin wait on MAXIMUM_IN_PROGRESS simultanous in progress writes/reads
             if in_progress_count == MAXIMUM_IN_PROGRESS {
-                spin_loop_hint();
+                spin_loop();
                 counters = self.load(Ordering::Acquire);
                 continue;
             }

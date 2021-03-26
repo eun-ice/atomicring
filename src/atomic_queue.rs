@@ -1,4 +1,5 @@
 use std::fmt::{self, Debug};
+use std::hint::spin_loop;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -104,7 +105,7 @@ impl<T> AtomicRingQueue<T> {
                 return res;
             }
             for _ in 0..i << 1 {
-                ::std::sync::atomic::spin_loop_hint();
+                spin_loop();
             }
         }
         for _ in 0..10 {

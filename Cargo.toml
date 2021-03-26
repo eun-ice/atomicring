@@ -1,6 +1,6 @@
 [package]
 name = "atomicring"
-version = "1.2.7"
+version = "1.2.8"
 authors = ["Crown Software GmbH"]
 description = "AtomicRingBuffer is a constant-size almost lock-free concurrent ring buffer"
 license = "MIT OR Apache-2.0"
