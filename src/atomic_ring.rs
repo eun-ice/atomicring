@@ -62,7 +62,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 ///
 ///```toml
 ///[dependencies]
-///atomicring = "1.2.8"
+///atomicring = "1.2.9"
 ///```
 ///
 ///
@@ -728,6 +728,8 @@ impl CounterStore {
 
 #[cfg(test)]
 mod tests {
+    use serial_test::serial;
+
     #[test]
     pub fn test_increments() {
         let read_counter_store = super::CounterStore::new();
@@ -987,7 +989,7 @@ mod tests {
     #[allow(dead_code)]
     #[derive(Debug, Default)]
     struct TestType {
-        some: usize
+        some: usize,
     }
 
 
@@ -998,6 +1000,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     pub fn test_dropcount() {
         DROP_COUNT.store(0, ::std::sync::atomic::Ordering::Relaxed);
         {
@@ -1013,6 +1016,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     pub fn test_inline_dropcount() {
         DROP_COUNT.store(0, ::std::sync::atomic::Ordering::Relaxed);
         {
@@ -1028,6 +1032,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     pub fn test_unsafe_dropcount() {
         DROP_COUNT.store(0, ::std::sync::atomic::Ordering::Relaxed);
         {
