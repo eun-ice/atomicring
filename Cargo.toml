@@ -1,7 +1,7 @@
 [package]
 name = "atomicring"
 version = "1.2.9"
-authors = ["Crown Software GmbH"]
+authors = ["Crown Communications GmbH"]
 description = "AtomicRingBuffer is a constant-size almost lock-free concurrent ring buffer"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/eun-ice/atomicring"
@@ -13,12 +13,12 @@ index_access = []
 default = ["index_access"]
 
 [dependencies]
-parking_lot = "0.11"
+parking_lot = "0.12.1"
 
 [dev-dependencies]
 mpmc = "0.1.5"
-crossbeam-queue = "0.3.0"
-serial_test = "0.5.1"
+crossbeam-queue = "0.3.11"
+serial_test = "3.0.0"
 
 
 [profile.bench]
